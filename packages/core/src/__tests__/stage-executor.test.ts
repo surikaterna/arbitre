@@ -1,25 +1,36 @@
 import { compile } from "kuery/compile";
 import { describe, expect, it } from "vitest";
 import { createAgenda } from "../agenda.js";
-import type { CompiledStage, OperatorFunction, ThenOperatorRegistry } from "../contracts.js";
-import { createOperatorRegistry } from "../expression-operators.js";
+import type { CompiledStage, ThenOperatorRegistry } from "../contracts.js";
+import { compileArbitreValue } from "../expression-lower.js";
+import { arbitreV1 } from "../expression-profile.js";
 import { createScopeManager } from "../scope.js";
-import { type StageExecContext, executeStages, resolveValue } from "../stage-executor.js";
+import { type StageExecContext, executeStages } from "../stage-executor.js";
 
 function makeCtx(
 	initialState?: Record<string, unknown>,
-	opts?: { thenOperators?: ThenOperatorRegistry; operators?: Record<string, (...args: unknown[]) => unknown> },
+	opts?: { thenOperators?: ThenOperatorRegistry },
 ): StageExecContext {
 	return {
 		scope: createScopeManager(initialState),
 		agenda: createAgenda(),
 		thenOperators: opts?.thenOperators,
-		operators: opts?.operators,
 	};
 }
 
 function stage(operator: string, entries: Record<string, unknown>): CompiledStage {
-	return { operator, entries: new Map(Object.entries(entries)) };
+	const compiled = ["$set", "$inc", "$push", "$merge"].includes(operator)
+		? Object.entries(entries).map(([path, value]) => [
+				path,
+				compileArbitreValue(value, {
+					bindings: new Set(),
+					namespaces: new Set(["$meta"]),
+					profile: arbitreV1,
+					ruleName: "r1",
+				}),
+			])
+		: Object.entries(entries);
+	return { operator, entries: new Map(compiled) };
 }
 
 // ---------------------------------------------------------------------------
@@ -215,91 +226,5 @@ describe("custom then operators", () => {
 		};
 		const ctx = makeCtx({}, { thenOperators: registry });
 		expect(() => executeStages([stage("$notfound", { x: 1 })], "r1", ctx)).toThrow('Unknown then operator "$notfound"');
-	});
-});
-
-// ---------------------------------------------------------------------------
-// resolveValue
-// ---------------------------------------------------------------------------
-
-describe("resolveValue", () => {
-	it("should resolve namespaced references from scope", () => {
-		const scope = createScopeManager({ $state: { x: 42 } });
-		scope.set("$state.x", 42, "test");
-		const result = resolveValue("$$state.x", scope);
-		expect(result).toBe(42);
-	});
-
-	it("should resolve plain binding references", () => {
-		const scope = createScopeManager();
-		scope.set("count", 10, "test");
-		const result = resolveValue("$count", scope);
-		expect(result).toBe(10);
-	});
-
-	it("should return literal values unchanged", () => {
-		const scope = createScopeManager();
-		expect(resolveValue(42, scope)).toBe(42);
-		expect(resolveValue("hello", scope)).toBe("hello");
-		expect(resolveValue(null, scope)).toBeNull();
-	});
-});
-
-// ---------------------------------------------------------------------------
-// evaluateExpression (via resolveValue)
-// ---------------------------------------------------------------------------
-
-describe("evaluateExpression", () => {
-	const operators = createOperatorRegistry();
-
-	it("should evaluate $sum expression", () => {
-		const scope = createScopeManager();
-		const result = resolveValue({ $sum: [1, 2, 3] }, scope, operators);
-		expect(result).toBe(6);
-	});
-
-	it("should evaluate $multiply expression", () => {
-		const scope = createScopeManager();
-		const result = resolveValue({ $multiply: [2, 3, 4] }, scope, operators);
-		expect(result).toBe(24);
-	});
-
-	it("should return null for $multiply with non-numeric args", () => {
-		const scope = createScopeManager();
-		const result = resolveValue({ $multiply: [2, "x"] }, scope, operators);
-		expect(result).toBeNull();
-	});
-
-	it("should evaluate nested expressions", () => {
-		const scope = createScopeManager();
-		const result = resolveValue({ $sum: [{ $multiply: [2, 3] }, 4] }, scope, operators);
-		expect(result).toBe(10);
-	});
-
-	it("should evaluate $multiply expression via custom operators", () => {
-		const scope = createScopeManager();
-		const result = resolveValue({ $multiply: [2, 3, 4] }, scope, operators);
-		expect(result).toBe(24);
-	});
-
-	it("should return null for unknown expression without operators", () => {
-		const scope = createScopeManager();
-		const result = resolveValue({ $sum: [1, 2, 3] }, scope);
-		expect(result).toBeNull();
-	});
-
-	it("should evaluate nested expressions", () => {
-		const scope = createScopeManager();
-		const result = resolveValue({ $sum: [{ $multiply: [2, 3] }, 4] }, scope, operators);
-		expect(result).toBe(10);
-	});
-
-	it("should dispatch to custom expression operator from registry", () => {
-		const scope = createScopeManager();
-		const custom = {
-			$double: ((args: readonly unknown[]) => (args[0] as number) * 2) as OperatorFunction,
-		};
-		const result = resolveValue({ $double: 5 }, scope, custom);
-		expect(result).toBe(10);
 	});
 });

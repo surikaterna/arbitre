@@ -2,14 +2,7 @@ import { evaluate } from "kuery";
 import type { Agenda } from "./agenda.js";
 import type { AlphaNetwork } from "./alpha-network.js";
 import type { Token } from "./beta-node.js";
-import type {
-	ArbiterWarning,
-	CompiledRule,
-	FiringResult,
-	OperatorFunction,
-	StateChange,
-	ThenOperatorRegistry,
-} from "./contracts.js";
+import type { ArbiterWarning, CompiledRule, FiringResult, StateChange, ThenOperatorRegistry } from "./contracts.js";
 import { ArbiterError, ArbiterErrorCode } from "./errors.js";
 import { emitHook } from "./hooks.js";
 import type { SessionHooks } from "./hooks.js";
@@ -39,7 +32,6 @@ export interface FireContext {
 	readonly agenda: Agenda;
 	readonly tms: TruthMaintenanceSystem;
 	readonly compiledRules: ReadonlyMap<string, CompiledRule>;
-	readonly operators: Readonly<Record<string, OperatorFunction>>;
 	readonly limits: FireLimits;
 	readonly ruleConditionState: Map<string, boolean>;
 	readonly thenOperators?: ThenOperatorRegistry | undefined;

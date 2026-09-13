@@ -27,8 +27,6 @@ const QUERY_OPERATORS = new Set([
 
 const LOGICAL_OPERATORS = new Set(["$and", "$or", "$nor"]);
 
-const DANGEROUS_EXPR_PATTERNS = ["$__proto__", "$constructor", "$prototype"];
-
 /**
  * Validate a rule before compilation. Throws ArbiterError on validation failure.
  */
@@ -103,11 +101,6 @@ function validateStrict(rule: ProductionRule): void {
 				{ ruleName: rule.name },
 			);
 		}
-	}
-
-	validateStageValues(rule.then, rule.name, "then");
-	if (rule.else) {
-		validateStageValues(rule.else, rule.name, "else");
 	}
 }
 
@@ -188,49 +181,5 @@ function walkWhenClause(obj: Record<string, unknown>, ruleName: string): void {
 		if (isRecord(val)) {
 			walkWhenClause(val, ruleName);
 		}
-	}
-}
-
-/**
- * Validates expression values within stages for dangerous references.
- */
-function validateStageValues(stages: readonly ThenStage[], ruleName: string, clause: string): void {
-	for (const stage of stages) {
-		const keys = Object.keys(stage);
-		const opKey = keys.find((k) => k.startsWith("$"));
-		if (!opKey) continue;
-
-		const body = stage[opKey];
-		if (!isRecord(body)) continue;
-
-		if (opKey === "$focus") continue;
-
-		for (const value of Object.values(body)) {
-			if (value !== undefined) {
-				checkValueForDangerousRefs(value, ruleName, clause);
-			}
-		}
-	}
-}
-
-function checkValueForDangerousRefs(value: unknown, ruleName: string, clause: string): void {
-	if (!isRecord(value)) {
-		if (Array.isArray(value)) {
-			for (const item of value) {
-				checkValueForDangerousRefs(item, ruleName, clause);
-			}
-		}
-		return;
-	}
-
-	for (const key of Object.keys(value)) {
-		if (DANGEROUS_EXPR_PATTERNS.includes(key)) {
-			throw new ArbiterError(
-				ArbiterErrorCode.PROTOTYPE_POLLUTION,
-				`Rule "${ruleName}" ${clause} expression references dangerous global: "${key}"`,
-				{ ruleName },
-			);
-		}
-		checkValueForDangerousRefs(value[key], ruleName, clause);
 	}
 }

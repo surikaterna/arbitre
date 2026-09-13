@@ -18,7 +18,8 @@ export function validatePath(path: string): void {
 		throw new ArbiterError(ArbiterErrorCode.INVALID_PATH, "Path must be a non-empty string");
 	}
 	try {
-		validateAndSplitPath(path);
+		const segments = validateAndSplitPath(path);
+		if ((segments as readonly string[]).some((segment) => segment.length === 0)) throw new TypeError();
 	} catch {
 		throw new ArbiterError(ArbiterErrorCode.PROTOTYPE_POLLUTION, `Path "${path}" contains dangerous segment`);
 	}

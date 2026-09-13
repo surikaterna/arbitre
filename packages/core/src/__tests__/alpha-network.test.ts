@@ -34,6 +34,7 @@ function makeRule(name: string, conditionPaths: string[], actionPaths: string[] 
 		enabled: true,
 		hasTms: true,
 		source,
+		dependencies: { conditionReads: conditionPaths, rhsReads: [], actionWrites: actionPaths, bindingReads: [] },
 	};
 }
 
@@ -92,19 +93,17 @@ describe("AlphaNetwork", () => {
 		expect(net.getAffectedRules("items.0.x")).toEqual([]);
 	});
 
-	test("getRuleDeps returns correct dependencies", () => {
+	test("getRuleDependencies returns classified dependencies", () => {
 		const net = createAlphaNetwork();
 		net.addRule(makeRule("r1", ["a", "b"], ["c"]));
-		const deps = net.getRuleDeps("r1");
-		expect(deps).toContain("a");
-		expect(deps).toContain("b");
-		expect(deps).toContain("c");
-		expect(deps).toHaveLength(3);
+		const deps = net.getRuleDependencies("r1");
+		expect(deps?.conditionReads).toEqual(["a", "b"]);
+		expect(deps?.actionWrites).toEqual(["c"]);
 	});
 
-	test("getRuleDeps returns empty for unknown rule", () => {
+	test("getRuleDependencies returns undefined for unknown rule", () => {
 		const net = createAlphaNetwork();
-		expect(net.getRuleDeps("nonexistent")).toEqual([]);
+		expect(net.getRuleDependencies("nonexistent")).toBeUndefined();
 	});
 
 	test("multi-wildcard a.*.b.*.c works", () => {

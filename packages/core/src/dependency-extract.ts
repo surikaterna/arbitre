@@ -1,4 +1,5 @@
 import type { CompiledStage } from "./contracts.js";
+import type { ArbitreReference, CompiledArbitreValue } from "./expression-types.js";
 import { isRecord } from "./type-guards.js";
 
 interface PathNode {
@@ -63,4 +64,28 @@ export function extractActionDeps(stages: readonly CompiledStage[]): readonly st
 		}
 	}
 	return [...paths];
+}
+
+export function extractRhsDeps(stages: readonly CompiledStage[]): readonly ArbitreReference[] {
+	const dependencies: ArbitreReference[] = [];
+	const seen = new Set<string>();
+	for (const stage of stages) {
+		if (!["$set", "$inc", "$push", "$merge"].includes(stage.operator)) continue;
+		for (const value of stage.entries.values()) collectRhsValue(value, dependencies, seen);
+	}
+	return Object.freeze(dependencies);
+}
+
+function collectRhsValue(value: unknown, output: ArbitreReference[], seen: Set<string>): void {
+	if (!isCompiledValue(value)) return;
+	for (const reference of value.expression.dependencies) {
+		const identity = JSON.stringify(reference);
+		if (seen.has(identity)) continue;
+		seen.add(identity);
+		output.push(reference);
+	}
+}
+
+function isCompiledValue(value: unknown): value is CompiledArbitreValue {
+	return isRecord(value) && isRecord(value.expression) && Array.isArray(value.expression.dependencies);
 }

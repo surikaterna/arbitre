@@ -22,8 +22,6 @@ export type {
 	ArbiterWarning,
 	FiringResult,
 	NamespaceConfig,
-	OperatorFunction,
-	OperatorRegistryConfig,
 	ProductionRule,
 	RuleSession,
 	SessionConfig,
@@ -38,6 +36,15 @@ export type {
 	Unsubscribe,
 	WriteRecord,
 } from "./contracts.js";
+export type {
+	ArbitreExpressionConfig,
+	ArbitreReference,
+	ArbitreValueExpression,
+	CanonicalArbitreExpression,
+	RuleDependencies,
+} from "./expression-types.js";
+export { expression, literal } from "./expression-types.js";
+export { arbitreV1 } from "./expression-profile.js";
 // Cross-type accumulation
 export type { CrossTypeAccumulator } from "./cross-type-accumulate.js";
 export { createCrossTypeAccumulator } from "./cross-type-accumulate.js";
@@ -69,8 +76,6 @@ export { defineRule } from "./rule-builder.js";
 export type { RuleBuilder } from "./rule-builder.js";
 // Session factory
 export { createSession } from "./session.js";
-// Temporal operators
-export { TEMPORAL_OPERATORS } from "./temporal-operators.js";
 // Timer queue
 export type { ScheduleOptions, TimerEntry, TimerQueue } from "./timer-queue.js";
 export { createTimerQueue } from "./timer-queue.js";

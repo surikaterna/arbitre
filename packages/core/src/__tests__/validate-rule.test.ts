@@ -86,11 +86,11 @@ describe("validateRule — strict level", () => {
 		expect(() => validateRule(rule)).not.toThrow();
 	});
 
-	it("rejects dangerous expression values", () => {
+	it("defers RHS value validation to the authoritative compiler", () => {
 		const rule = makeRule({
 			then: [{ $set: { x: { $__proto__: "bad" } } }],
 		});
-		expect(() => validateRule(rule)).toThrow("dangerous global");
+		expect(() => validateRule(rule)).not.toThrow();
 	});
 
 	it("rejects invalid activationGroup (empty string)", () => {
@@ -116,10 +116,10 @@ describe("validateRule — integration", () => {
 		expect(() => validateRule(rule)).toThrow("dangerous path");
 	});
 
-	it("catches dangerous expression values in nested objects", () => {
+	it("does not duplicate bounded RHS canonicalization", () => {
 		const rule = makeRule({
 			then: [{ $set: { x: { nested: { $__proto__: "bad" } } } }],
 		});
-		expect(() => validateRule(rule)).toThrow("dangerous global");
+		expect(() => validateRule(rule)).not.toThrow();
 	});
 });

@@ -91,12 +91,12 @@ describe("compileRule", () => {
 
 	it("throws on missing name", () => {
 		const rule = { name: "", when: { a: 1 }, then: [{ $set: { x: 1 } }] };
-		expect(() => compileRule(rule)).toThrow("must have a name");
+		expect(() => compileRule(rule)).toThrow("non-empty name");
 	});
 
 	it("throws on missing when", () => {
 		const rule = { name: "bad", when: null, then: [{ $set: { x: 1 } }] } as unknown as ProductionRule;
-		expect(() => compileRule(rule)).toThrow('must have a "when" condition');
+		expect(() => compileRule(rule)).toThrow('must have a "when" clause');
 	});
 
 	it("throws on missing then", () => {

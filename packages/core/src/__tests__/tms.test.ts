@@ -17,6 +17,7 @@ function makeRule(overrides: Partial<CompiledRule> = {}): CompiledRule {
 		enabled: true,
 		hasTms: true,
 		source: { name: "test-rule", when: {}, then: [] },
+		dependencies: { conditionReads: [], rhsReads: [], actionWrites: [], bindingReads: [] },
 		...overrides,
 	};
 }

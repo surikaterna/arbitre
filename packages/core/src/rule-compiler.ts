@@ -1,59 +1,35 @@
-import { compile } from "kuery/compile";
-import type { CompiledPattern, CompiledRule, ProductionRule } from "./contracts.js";
+import type { ExpressionLimits, ExpressionProfile } from "kuery/expression";
+import type { CompiledRule, ProductionRule } from "./contracts.js";
+import { extractActionDeps, extractConditionDeps, extractRhsDeps } from "./dependency-extract.js";
 import { ArbiterError, ArbiterErrorCode } from "./errors.js";
-import type { FactPattern } from "./fact-pattern.js";
-import { compileThenActions } from "./then-compiler.js";
+import { arbitreV1 } from "./expression-profile.js";
+import { compileRuleComponents, freezeRuleDependencies } from "./rule-components.js";
 import { isRecord } from "./type-guards.js";
-import { validateAccumulateConfigs } from "./validate-accumulate.js";
-import { validatePatterns } from "./validate-patterns.js";
+import { validateRule } from "./validate-rule.js";
 
 /**
  * Compiles a ProductionRule into a CompiledRule ready for the engine.
  */
-export function compileRule(rule: ProductionRule<unknown>, customFnNames?: ReadonlySet<string>): CompiledRule {
-	if (!rule.name) {
-		throw new ArbiterError(ArbiterErrorCode.RULE_COMPILATION_FAILED, "Rule must have a name");
-	}
+export interface RuleCompileOptions {
+	readonly customFnNames?: ReadonlySet<string> | undefined;
+	readonly namespaces: ReadonlySet<string>;
+	readonly profile: ExpressionProfile;
+	readonly limits?: Partial<ExpressionLimits> | undefined;
+}
 
-	if (!rule.when || !isRecord(rule.when)) {
-		throw new ArbiterError(
-			ArbiterErrorCode.RULE_COMPILATION_FAILED,
-			`Rule "${rule.name}" must have a "when" condition`,
-			{ ruleName: rule.name },
-		);
-	}
+const DEFAULT_OPTIONS: RuleCompileOptions = { namespaces: new Set(["$meta"]), profile: arbitreV1 };
 
-	if (!rule.then || rule.then.length === 0) {
-		throw new ArbiterError(
-			ArbiterErrorCode.RULE_COMPILATION_FAILED,
-			`Rule "${rule.name}" must have at least one "then" action`,
-			{ ruleName: rule.name },
-		);
-	}
-
-	const condition = compile(rule.when);
-	const actions = compileThenActions(rule.then);
-	const elseActions = rule.else ? compileThenActions(rule.else) : undefined;
-
-	let compiledPatterns: readonly CompiledPattern[] | undefined;
-	const hasPatterns = !!(rule.patterns && rule.patterns.length > 0);
-
-	if (hasPatterns) {
-		validatePatterns(rule.patterns as FactPattern[], rule.name);
-		compiledPatterns = rule.patterns?.map((p) => ({
-			$fact: p.$fact,
-			$bind: p.$bind,
-			$where: p.$where,
-			$join: p.$join,
-		}));
-	}
-
-	let accumulates: typeof rule.accumulate | undefined;
-	if (rule.accumulate?.length) {
-		validateAccumulateConfigs(rule.accumulate, rule.name, customFnNames);
-		accumulates = rule.accumulate;
-	}
-
+export function compileRule(
+	rule: ProductionRule<unknown>,
+	options: RuleCompileOptions = DEFAULT_OPTIONS,
+): CompiledRule {
+	validateRule(rule);
+	assertRuleShape(rule);
+	const components = compileRuleComponents(rule, options);
+	const { condition, actions, elseActions, hasPatterns, patterns, accumulates } = components;
+	const allActions = elseActions ? [...actions, ...elseActions] : actions;
+	const rhsReads = extractRhsDeps(allActions);
+	const dependencies = freezeRuleDependencies(extractConditionDeps(condition), rhsReads, extractActionDeps(allActions));
 	return {
 		name: rule.name,
 		condition,
@@ -65,8 +41,22 @@ export function compileRule(rule: ProductionRule<unknown>, customFnNames?: Reado
 		enabled: rule.enabled ?? true,
 		hasTms: rule.else === undefined,
 		hasPatterns,
-		patterns: compiledPatterns,
+		patterns,
 		accumulates,
 		source: rule,
+		dependencies,
 	};
+}
+
+function assertRuleShape(rule: ProductionRule<unknown>): void {
+	if (!rule.name) throw new ArbiterError(ArbiterErrorCode.RULE_COMPILATION_FAILED, "Rule must have a name");
+	if (!rule.when || !isRecord(rule.when)) {
+		throw new ArbiterError(
+			ArbiterErrorCode.RULE_COMPILATION_FAILED,
+			`Rule "${rule.name}" must have a "when" condition`,
+		);
+	}
+	if (!rule.then?.length) {
+		throw new ArbiterError(ArbiterErrorCode.RULE_COMPILATION_FAILED, `Rule "${rule.name}" must have a "then" action`);
+	}
 }

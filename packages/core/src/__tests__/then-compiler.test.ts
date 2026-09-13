@@ -8,13 +8,20 @@ describe("compileThenActions", () => {
 		const result = compileThenActions(stages);
 		expect(result).toHaveLength(1);
 		expect(result[0].operator).toBe("$set");
-		expect(result[0].entries.get("score")).toBe(100);
+		expect(result[0].entries.get("score")).toMatchObject({ expression: { dependencies: [] } });
 	});
 
 	it("compiles $set stage with expression value", () => {
 		const stages: readonly ThenStage[] = [{ $set: { total: { $sum: ["$a", "$b"] } } }];
 		const result = compileThenActions(stages);
-		expect(result[0].entries.get("total")).toEqual({ $sum: ["$a", "$b"] });
+		expect(result[0].entries.get("total")).toMatchObject({
+			expression: {
+				dependencies: [
+					{ source: "root", path: "a" },
+					{ source: "root", path: "b" },
+				],
+			},
+		});
 	});
 
 	it("compiles $unset stage", () => {
@@ -28,7 +35,7 @@ describe("compileThenActions", () => {
 		const stages: readonly ThenStage[] = [{ $push: { items: "new-item" } }];
 		const result = compileThenActions(stages);
 		expect(result[0].operator).toBe("$push");
-		expect(result[0].entries.get("items")).toBe("new-item");
+		expect(result[0].entries.get("items")).toMatchObject({ expression: { dependencies: [] } });
 	});
 
 	it("compiles $pull stage with match condition", () => {
@@ -42,14 +49,14 @@ describe("compileThenActions", () => {
 		const stages: readonly ThenStage[] = [{ $inc: { counter: 1 } }];
 		const result = compileThenActions(stages);
 		expect(result[0].operator).toBe("$inc");
-		expect(result[0].entries.get("counter")).toBe(1);
+		expect(result[0].entries.get("counter")).toMatchObject({ expression: { dependencies: [] } });
 	});
 
 	it("compiles $merge stage with object value", () => {
 		const stages: readonly ThenStage[] = [{ $merge: { config: { theme: "dark" } } }];
 		const result = compileThenActions(stages);
 		expect(result[0].operator).toBe("$merge");
-		expect(result[0].entries.get("config")).toEqual({ theme: "dark" });
+		expect(result[0].entries.get("config")).toMatchObject({ expression: { dependencies: [] } });
 	});
 
 	it("compiles $focus stage", () => {

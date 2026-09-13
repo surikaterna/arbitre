@@ -41,23 +41,16 @@
 			"require": "./dist/debug.cjs"
 		}
 	},
-	"files": ["dist", "src"],
+	"files": ["dist", "src", "docs"],
 	"sideEffects": false,
 	"scripts": {
 		"build": "tsc --noEmit",
 		"build:dist": "tsup",
-		"test": "vitest run"
+		"prepare:kuery": "node ../../scripts/prepare-kuery-expression.mjs",
+		"test": "bun run prepare:kuery && vitest run --root ../.. packages/core/src/__tests__"
 	},
-	"peerDependencies": {
-		"kuery": ">=2.0.0"
-	},
-	"peerDependenciesMeta": {
-		"kuery": {
-			"optional": false
-		}
-	},
-	"devDependencies": {
-		"kuery": "^2.0.0"
+	"dependencies": {
+		"kuery": "github:surikaterna/kuery#e446db3bb55444390945741dd75bfd351a604fe2"
 	},
 	"publishConfig": {
 		"access": "public"
