@@ -55,12 +55,35 @@ function executeValues(
 ): StateChange[] {
 	const changes: StateChange[] = [];
 	for (const [path, compiled] of stage.entries) {
-		const value = evaluateArbitreValue(compiled as CompiledArbitreValue, ctx.scope, ruleName, ctx.token);
+		const value = evaluateStageValue(stage, path, compiled as CompiledArbitreValue, ruleName, ctx);
 		const previousValue = ctx.scope.get(path);
 		write(path, value);
 		changes.push({ path, previousValue, newValue: ctx.scope.get(path), ruleName });
 	}
 	return changes;
+}
+
+function evaluateStageValue(
+	stage: CompiledStage,
+	path: string,
+	compiled: CompiledArbitreValue,
+	ruleName: string,
+	ctx: StageExecContext,
+) {
+	try {
+		return evaluateArbitreValue(compiled, ctx.scope, ruleName, ctx.token);
+	} catch (error) {
+		if (!["$inc", "$merge"].includes(stage.operator) || !isEvaluationError(error)) throw error;
+		const diagnostic = error.details as { diagnosticCode?: string } | undefined;
+		throw new ArbiterError(error.code, `${stage.operator} failed for rule "${ruleName}" at ${path}`, {
+			ruleName,
+			details: { ruleName, path, reason: diagnostic?.diagnosticCode ?? "expression evaluation failed" },
+		});
+	}
+}
+
+function isEvaluationError(error: unknown): error is ArbiterError {
+	return error instanceof ArbiterError && error.code === ArbiterErrorCode.EXPRESSION_EVALUATION_FAILED;
 }
 
 function executeUnset(stage: CompiledStage, ruleName: string, ctx: StageExecContext): StateChange[] {

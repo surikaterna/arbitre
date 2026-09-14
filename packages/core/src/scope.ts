@@ -7,6 +7,7 @@ export type Namespace = "root" | "$meta" | string;
 
 export interface ScopeManager {
 	readonly get: (path: string) => unknown;
+	readonly hasOwn: (path: string) => boolean;
 	readonly set: (path: string, value: unknown, ruleName: string) => WriteRecord | undefined;
 	readonly unset: (path: string, ruleName: string) => WriteRecord | undefined;
 	readonly push: (path: string, value: unknown, ruleName: string) => WriteRecord | undefined;
@@ -43,6 +44,7 @@ export function createScopeManager(
 function assembleScopeManager(storage: ScopeStorage, provenance: ScopeProvenance, writes: ScopeWrites): ScopeManager {
 	return {
 		get: storage.read,
+		hasOwn: storage.hasOwn,
 		set: writes.set,
 		unset: writes.unset,
 		push: writes.push,

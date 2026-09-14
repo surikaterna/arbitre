@@ -166,11 +166,10 @@ describe("$merge operator", () => {
 		expect(result.c).toBe(4);
 	});
 
-	it("should set value when target is primitive", () => {
+	it("should reject an existing primitive target", () => {
 		const ctx = makeCtx({ config: "old" });
-		executeStages([stage("$merge", { config: { a: 1 } })], "r1", ctx);
-		const result = ctx.scope.get("config") as Record<string, unknown>;
-		expect(result.a).toBe(1);
+		expect(() => executeStages([stage("$merge", { config: { a: 1 } })], "r1", ctx)).toThrow("merge failed for rule");
+		expect(ctx.scope.get("config")).toBe("old");
 	});
 });
 

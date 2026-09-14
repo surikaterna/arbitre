@@ -7,6 +7,11 @@ export interface ResolvedNamespace {
 	readonly localPath: string;
 }
 
+export interface OwnPathValue {
+	readonly exists: boolean;
+	readonly value?: unknown;
+}
+
 export class ScopeStorage {
 	readonly registeredNamespaces: ReadonlySet<string>;
 	private readonly stores: Record<string, Record<string, unknown>>;
@@ -36,6 +41,15 @@ export class ScopeStorage {
 		if (localPath === "") return this.store(namespace);
 		return deepGet(this.store(namespace), splitPath(localPath));
 	};
+
+	readonly readOwn = (path: string): OwnPathValue => {
+		validatePath(path);
+		const { namespace, localPath } = this.resolveNamespace(path);
+		if (localPath === "") return { exists: true, value: this.store(namespace) };
+		return deepGetOwn(this.store(namespace), splitPath(localPath));
+	};
+
+	readonly hasOwn = (path: string): boolean => this.readOwn(path).exists;
 
 	readonly write = (path: string, value: unknown): boolean => {
 		const target = this.writeTarget(path);
@@ -104,27 +118,51 @@ function deepGet(object: Record<string, unknown>, segments: readonly string[]): 
 	return collectPath(object, segments);
 }
 
+function deepGetOwn(object: Record<string, unknown>, segments: readonly string[]): OwnPathValue {
+	let current: object = object;
+	for (let index = 0; index < segments.length; index++) {
+		const segment = segments[index]!;
+		const descriptor = Object.getOwnPropertyDescriptor(current, segment);
+		if (!descriptor || !("value" in descriptor)) return { exists: false };
+		if (index === segments.length - 1) return { exists: true, value: descriptor.value };
+		if (descriptor.value === null || typeof descriptor.value !== "object") return { exists: false };
+		current = descriptor.value;
+	}
+	return { exists: false };
+}
+
 function deepSet(object: Record<string, unknown>, segments: readonly string[], value: unknown): void {
 	let current = object;
 	for (let index = 0; index < segments.length - 1; index++) {
 		const segment = segments[index]!;
-		const next = current[segment];
+		const descriptor = Object.getOwnPropertyDescriptor(current, segment);
+		const next = descriptor && "value" in descriptor ? descriptor.value : undefined;
 		if (isRecord(next)) current = next;
 		else {
 			const created: Record<string, unknown> = {};
-			current[segment] = created;
+			defineDataProperty(current, segment, created);
 			current = created;
 		}
 	}
-	current[segments[segments.length - 1]!] = value;
+	defineDataProperty(current, segments[segments.length - 1]!, value);
 }
 
 function deepDelete(object: Record<string, unknown>, segments: readonly string[]): void {
 	let current = object;
 	for (let index = 0; index < segments.length - 1; index++) {
-		const next = current[segments[index]!];
+		const descriptor = Object.getOwnPropertyDescriptor(current, segments[index]!);
+		const next = descriptor && "value" in descriptor ? descriptor.value : undefined;
 		if (!isRecord(next)) return;
 		current = next;
 	}
 	delete current[segments[segments.length - 1]!];
+}
+
+function defineDataProperty(object: Record<string, unknown>, key: string, value: unknown): void {
+	const descriptor = Object.getOwnPropertyDescriptor(object, key);
+	if ((descriptor && "value" in descriptor && descriptor.writable) || (!descriptor && !Reflect.has(object, key))) {
+		object[key] = value;
+		return;
+	}
+	Object.defineProperty(object, key, { configurable: true, enumerable: true, writable: true, value });
 }

@@ -67,5 +67,7 @@ function snapshotKey(ruleName: string, path: string): string {
 function safeClone(value: unknown): unknown {
 	if (value === undefined || value === null || typeof value !== "object") return value;
 	if (Array.isArray(value)) return [...value];
-	return structuredClone(value);
+	const clone = structuredClone(value);
+	if (Object.getPrototypeOf(value) === null) Object.setPrototypeOf(clone, null);
+	return clone;
 }
