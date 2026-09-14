@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProductionRule, SessionConfig } from "../contracts.js";
 import { createSession } from "../session.js";
+import { formatDurations, measureMedian } from "./performance-harness.js";
 
 function makeConfig(rules: readonly ProductionRule[]): SessionConfig {
 	return {
@@ -147,7 +148,7 @@ describe("Fact-Triggered Fire Cycle", () => {
 		expect(session.getPath("result.big")).toBe(true);
 	});
 
-	it("performance: 100 facts × 5 rules in <50ms", () => {
+	it("performance: 100 facts × 5 rules median is <50ms", () => {
 		const rules: ProductionRule[] = [];
 		for (let i = 0; i < 5; i++) {
 			rules.push({
@@ -158,15 +159,20 @@ describe("Fact-Triggered Fire Cycle", () => {
 			});
 		}
 
-		const session = createSession(makeConfig(rules));
-
-		const start = performance.now();
-		for (let i = 0; i < 100; i++) {
-			session.assertFact("Order", { status: "pending", amount: i, customerId: `c${i}` });
-		}
-		session.fire();
-		const elapsed = performance.now() - start;
-
-		expect(elapsed).toBeLessThan(50);
+		const elapsed = measureMedian(() => createFactWorkload(rules));
+		expect(elapsed.results).toEqual(Array(7).fill(true));
+		expect(elapsed.median).toBeLessThan(50);
+		console.log(`100 facts × 5 rules median: ${formatDurations(elapsed)}`);
 	});
 });
+
+function createFactWorkload(rules: readonly ProductionRule[]): () => boolean {
+	const session = createSession(makeConfig(rules));
+	return () => {
+		for (let index = 0; index < 100; index++) {
+			session.assertFact("Order", { status: "pending", amount: index, customerId: `c${index}` });
+		}
+		const result = session.fire();
+		return result.rulesFired === 5 && session.introspect.getFactCounts().Order === 100;
+	};
+}
