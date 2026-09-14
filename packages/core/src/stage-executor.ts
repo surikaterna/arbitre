@@ -77,7 +77,12 @@ function evaluateStageValue(
 		const diagnostic = error.details as { diagnosticCode?: string } | undefined;
 		throw new ArbiterError(error.code, `${stage.operator} failed for rule "${ruleName}" at ${path}`, {
 			ruleName,
-			details: { ruleName, path, reason: diagnostic?.diagnosticCode ?? "expression evaluation failed" },
+			details: {
+				operator: stage.operator,
+				ruleName,
+				path,
+				reason: diagnostic?.diagnosticCode ?? "expression evaluation failed",
+			},
 		});
 	}
 }

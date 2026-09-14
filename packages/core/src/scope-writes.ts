@@ -33,22 +33,23 @@ export class ScopeWrites {
 		try {
 			inspected = this.storage.readOwn(path);
 		} catch {
-			throwWriteError("inc", path, ruleName, "existing value could not be inspected");
+			throwWriteError("$inc", path, ruleName, "existing value could not be inspected");
 		}
-		if (!isFiniteNumber(amount)) throwWriteError("inc", path, ruleName, "amount must be finite");
+		if (!isFiniteNumber(amount)) throwWriteError("$inc", path, ruleName, "amount must be finite");
 		if (inspected.kind === "uninspectable") {
-			throwWriteError("inc", path, ruleName, "existing value is not a data property");
+			throwWriteError("$inc", path, ruleName, "existing value is not a data property");
 		}
 		if (inspected.kind === "data" && !isFiniteNumber(inspected.value)) {
-			throwWriteError("inc", path, ruleName, "existing value must be finite");
+			throwWriteError("$inc", path, ruleName, "existing value must be finite");
 		}
 		const base = inspected.kind === "data" ? (inspected.value as number) : 0;
 		const result = base + amount;
-		if (!Number.isFinite(result)) throwWriteError("inc", path, ruleName, "result must be finite");
-		return this.commit(path, result, inspected.kind === "data" ? inspected.value : undefined, ruleName);
+		if (!Number.isFinite(result)) throwWriteError("$inc", path, ruleName, "result must be finite");
+		return this.commitStrict("$inc", path, result, inspected.kind === "data" ? inspected.value : undefined, ruleName);
 	};
 
 	readonly merge = (path: string, value: unknown, ruleName: string): WriteRecord | undefined => {
+		let prepared: { readonly merged: Record<string, unknown>; readonly previous: unknown };
 		try {
 			const current = this.storage.readOwn(path);
 			const rhs = inspectPlainDataObject(value);
@@ -56,11 +57,26 @@ export class ScopeWrites {
 			const target = current.kind === "data" ? inspectPlainDataObject(current.value) : undefined;
 			const merged = target ? materializeObject(target.prototype, target, rhs) : materializeObject(rhs.prototype, rhs);
 			const previous = target ? cloneState(materializeObject(target.prototype, target)) : undefined;
-			return this.commit(path, merged, previous, ruleName);
+			prepared = { merged, previous };
 		} catch {
-			throwWriteError("merge", path, ruleName, "value must be a descriptor-safe plain object");
+			throwWriteError("$merge", path, ruleName, "value must be a descriptor-safe plain object");
 		}
+		return this.commitStrict("$merge", path, prepared.merged, prepared.previous, ruleName);
 	};
+
+	private commitStrict(
+		operator: StrictWriteOperator,
+		path: string,
+		value: unknown,
+		previous: unknown,
+		ruleName: string,
+	): WriteRecord | undefined {
+		try {
+			return this.commit(path, value, previous, ruleName);
+		} catch {
+			throwWriteError(operator, path, ruleName, "write could not be committed");
+		}
+	}
 
 	private commit(path: string, value: unknown, previous: unknown, ruleName: string): WriteRecord | undefined {
 		if (!this.storage.write(path, value)) return undefined;
@@ -107,13 +123,15 @@ function isFiniteNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value);
 }
 
-function throwWriteError(operator: "inc" | "merge", path: string, ruleName: string, reason: string): never {
+type StrictWriteOperator = "$inc" | "$merge";
+
+function throwWriteError(operator: StrictWriteOperator, path: string, ruleName: string, reason: string): never {
 	throw new ArbiterError(
 		ArbiterErrorCode.EXPRESSION_EVALUATION_FAILED,
 		`${operator} failed for rule "${ruleName}" at ${path}`,
 		{
 			ruleName,
-			details: { ruleName, path, reason },
+			details: { operator, ruleName, path, reason },
 		},
 	);
 }

@@ -49,6 +49,7 @@ describe("strict $inc writes", () => {
 		expect(scope.hasOwn("holder.count")).toBe(true);
 		const error = captureError(() => scope.inc("holder.count", 1, "inc"));
 		expect(error.details).toEqual({
+			operator: "$inc",
 			ruleName: "inc",
 			path: "holder.count",
 			reason: "existing value is not a data property",
@@ -69,12 +70,26 @@ describe("strict $inc writes", () => {
 		const scope = preparedScope(holder, "holder");
 		const error = captureError(() => scope.inc("holder.count", 1, "inc"));
 		expect(error.details).toEqual({
+			operator: "$inc",
 			ruleName: "inc",
 			path: "holder.count",
 			reason: "existing value is not a data property",
 		});
 		expect(scope.get("holder")).toBe(holder);
 		expect(scope.getWriteRecords("inc")).toEqual([]);
+	});
+
+	it("redacts commit-path exceptions without claiming hostile proxy rollback", () => {
+		const holder = commitThrowingProxy({ count: 1 });
+		const scope = preparedScope(holder, "holder");
+		const error = captureError(() => scope.inc("holder.count", 1, "inc"));
+		expect(error.details).toEqual({
+			operator: "$inc",
+			ruleName: "inc",
+			path: "holder.count",
+			reason: "write could not be committed",
+		});
+		expect(JSON.stringify(error)).not.toContain("SECRET");
 	});
 
 	it("applies strict validation to literal and referenced amounts", () => {
@@ -91,6 +106,7 @@ describe("strict $inc writes", () => {
 		});
 		const error = captureError(() => referenced.fire());
 		expect(error.details).toEqual({
+			operator: "$inc",
 			ruleName: "referenced",
 			path: "count",
 			reason: "EXPRESSION_INVALID_RESULT",
@@ -227,6 +243,19 @@ describe("strict $merge writes", () => {
 		expectWriteFailure(() => scope.merge("config", {}, "merge"), scope, "config", throwing);
 	});
 
+	it("redacts merge commit-path exceptions without exposing their cause", () => {
+		const holder = commitThrowingProxy({ config: { kept: 1 } });
+		const scope = preparedScope(holder, "holder");
+		const error = captureError(() => scope.merge("holder.config", { added: 2 }, "merge"));
+		expect(error.details).toEqual({
+			operator: "$merge",
+			ruleName: "merge",
+			path: "holder.config",
+			reason: "write could not be committed",
+		});
+		expect(JSON.stringify(error)).not.toContain("SECRET");
+	});
+
 	it.each([[], new Date(), /x/, new (class Existing {})(), () => 1, undefined, null, "old"])(
 		"rejects invalid existing targets atomically",
 		(value) => {
@@ -254,10 +283,18 @@ function expectWriteFailure(action: () => unknown, scope: ScopeManager, path: st
 	expect(error.code).toBe("ARBITER_EXPRESSION_EVALUATION_FAILED");
 	const ruleName = error.ruleName;
 	expect(["inc", "merge"]).toContain(ruleName);
-	expect(error.details).toEqual({ ruleName, path, reason: expect.any(String) });
+	expect(error.details).toEqual({ operator: `$${ruleName}`, ruleName, path, reason: expect.any(String) });
 	expect(scope.get(path)).toBe(expected);
 	expect(scope.getWriteRecords("inc")).toEqual([]);
 	expect(scope.getWriteRecords("merge")).toEqual([]);
+}
+
+function commitThrowingProxy<T extends Record<string, unknown>>(target: T): T {
+	return new Proxy(target, {
+		set: () => {
+			throw new Error("SECRET commit cause");
+		},
+	});
 }
 
 function captureError(action: () => unknown): ArbiterError {

@@ -209,7 +209,8 @@ describe("custom then operators", () => {
 		const ctx = makeCtx({}, { thenOperators: registry });
 		const changes = executeStages([stage("$custom", { result: "test" })], "r1", ctx);
 		expect(ctx.scope.get("result")).toBe("custom:test");
-		expect(changes).toHaveLength(1);
+		expect(changes).toEqual([{ path: "result", previousValue: undefined, newValue: "custom:test", ruleName: "r1" }]);
+		expect(ctx.scope.getWriteRecords("r1")).toHaveLength(1);
 	});
 
 	it("should throw when operator is unknown and no registry", () => {

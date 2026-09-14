@@ -78,7 +78,12 @@ describe("checkpoint / rollback", () => {
 	});
 
 	it("preserves recursive null prototypes across rollback and subsequent writes", () => {
-		const config = Object.assign(Object.create(null) as Record<string, unknown>, { value: 1 });
+		const shared = Object.assign(Object.create(null) as Record<string, unknown>, { nested: true });
+		const config = Object.assign(Object.create(null) as Record<string, unknown>, {
+			value: 1,
+			first: shared,
+			second: shared,
+		});
 		config.self = config;
 		const session = createSession({
 			initialState: { config, trigger: false },
@@ -90,6 +95,8 @@ describe("checkpoint / rollback", () => {
 		const restored = session.getState().config as Record<string, unknown>;
 		expect(Object.getPrototypeOf(restored)).toBeNull();
 		expect(restored.self).toBe(restored);
+		expect(restored.first).toBe(restored.second);
+		expect(Object.getPrototypeOf(restored.first as object)).toBeNull();
 
 		session.assert("config.extra", 3);
 		session.assert("trigger", true);
