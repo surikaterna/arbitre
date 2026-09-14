@@ -247,9 +247,11 @@ const rule = {
 };
 ```
 
-Each RHS entry resolves against live state immediately before its write. Declared token bindings take precedence over root paths. Use `session.introspect.getRuleDependencies(name)` to inspect condition reads, RHS reads, action writes, and token-binding reads; only condition reads schedule rules.
+Each RHS entry resolves against live state immediately before its write. Declared token bindings take precedence over root paths. Use `session.introspect.getRuleDependencies(name)` to inspect condition reads, RHS reads, action writes, and token-binding reads; only condition reads schedule rules. `actionWrites` contains statically known built-in paths. Rules containing a custom stage also expose `actionWritesUnknown: true`, without treating custom entry keys as writes; runtime state changes remain exact.
 
 Strict shorthand includes arithmetic (`$sum`, `$multiply`, `$subtract`, `$divide`), `$min`/`$max`/`$avg`, rounding, string-only `$concat`, comparisons, boolean logic, membership, `$exists`, `$ifNull`, and lazy `$cond`. Variadic `$sum`/`$multiply` lower to standard `add`/`mul`. `$foo.bar` selects a declared `foo` binding, registered `$foo` namespace, or root path in that order; `$$foo.bar` forces a declared namespace. Dot characters delimit safe segments and are not literal key characters. `$switch`, conversions, and legacy temporal RHS callbacks are deterministic migration errors. See [ADR 0001](./docs/adr/0001-kuery-expression-runtime.md) for the complete migration table and temporary Kuery release blocker.
+
+`$inc` uses zero only for an absent terminal own property and otherwise requires a finite existing number, finite amount, and finite result. `$merge` shallow-copies exact plain data objects only: `Object.prototype` and null prototypes are accepted, while exotic prototypes, accessors, symbols, non-enumerables, and unsafe keys are rejected before copying. Missing merges preserve the RHS prototype; existing merges preserve the target prototype. Kuery owns bounded expression compilation/evaluation and lazy expression semantics; Arbitre owns lowering, live resolution, write ordering, scheduling, TMS, effects, and custom stages.
 
 ### Condition operators
 
