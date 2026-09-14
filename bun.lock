@@ -17,7 +17,7 @@
       "name": "@arbitre/core",
       "version": "0.2.1",
       "dependencies": {
-        "kuery": "github:surikaterna/kuery#e446db3bb55444390945741dd75bfd351a604fe2",
+        "kuery": "github:surikaterna/kuery#0c0b623adf871d11b437f67535696405a59e6e49",
       },
     },
   },
@@ -388,7 +388,7 @@
 
     "jsonfile": ["jsonfile@4.0.0", "", { "optionalDependencies": { "graceful-fs": "^4.1.6" } }, "sha512-m6F1R3z8jjlf2imQHS2Qez5sjKWQzbuuhuJ/FKYFRZvPE3PuHcSMVZzfsLhGVOkfd20obL5SWEBew5ShlquNxg=="],
 
-    "kuery": ["kuery@github:surikaterna/kuery#e446db3", {}, "surikaterna-kuery-e446db3"],
+    "kuery": ["kuery@github:surikaterna/kuery#0c0b623", {}, "surikaterna-kuery-0c0b623"],
 
     "lilconfig": ["lilconfig@3.1.3", "", {}, "sha512-/vlFKAoH5Cgt3Ie+JLhRbwOsCQePABiU3tJ1egGvyQ+33R/vcwM2Zl2QR/LzjsBeItPt3oSVXapn+m4nQDvpzw=="],
 

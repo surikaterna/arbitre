@@ -251,6 +251,30 @@ describe("registration and evaluation diagnostics", () => {
 		});
 	});
 
+	it("preserves denied references nested below missing-aware operators", () => {
+		const compiled = compileArbitreValue(
+			expression({
+				kind: "op",
+				op: "exists",
+				args: [
+					{
+						kind: "op",
+						op: "add",
+						args: [
+							{ kind: "literal", value: 1 },
+							{ kind: "ref", ref: { source: "binding", binding: "x", path: "v" } },
+						],
+					},
+				],
+			}),
+			{ ...options(), bindings: new Set(["x"]) },
+		);
+		expect(compiled.expression.evaluate(() => ({ found: false, reason: "denied" }))).toMatchObject({
+			ok: false,
+			diagnostic: { code: "EXPRESSION_REFERENCE_DENIED", path: ["args", 0, "args", 1] },
+		});
+	});
+
 	it("contains throwing and invalid pure extension outcomes", () => {
 		for (const execute of [
 			() => {
@@ -280,6 +304,34 @@ describe("registration and evaluation diagnostics", () => {
 				"Invalid Arbitre expression profile extension",
 			);
 		}
+	});
+
+	it("rejects invalid extension value-type metadata", () => {
+		for (const metadata of [{ inputTypes: "number" }, { inputTypes: ["invalid"] }, { resultType: "invalid" }]) {
+			expect(() =>
+				createSession({
+					expressions: {
+						extensions: [{ name: "app:invalid", arity: 0, execute: () => null, ...metadata } as never],
+					},
+				}),
+			).toThrow("Invalid Arbitre expression profile extension");
+		}
+	});
+
+	it("applies string limits by code point to values and object keys", () => {
+		expect(run(expression({ kind: "literal", value: "😀" }), {})).toBe("😀");
+		const accepted = createSession({
+			expressions: { limits: { maxStringLength: 1 } },
+			rules: [rule(expression({ kind: "literal", value: "😀" }))],
+		});
+		accepted.fire();
+		expect(accepted.getPath("result")).toBe("😀");
+		expect(() =>
+			createSession({
+				expressions: { limits: { maxStringLength: 1 } },
+				rules: [rule(expression({ kind: "literal", value: { aa: true } }))],
+			}),
+		).toThrow("EXPRESSION_LIMIT_EXCEEDED");
 	});
 
 	it("supports caller-selected stricter expression bounds", () => {

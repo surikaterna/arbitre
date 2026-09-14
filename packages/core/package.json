@@ -50,7 +50,7 @@
 		"test": "bun run prepare:kuery && vitest run --root ../.. packages/core/src/__tests__"
 	},
 	"dependencies": {
-		"kuery": "github:surikaterna/kuery#e446db3bb55444390945741dd75bfd351a604fe2"
+		"kuery": "github:surikaterna/kuery#0c0b623adf871d11b437f67535696405a59e6e49"
 	},
 	"publishConfig": {
 		"access": "public"
