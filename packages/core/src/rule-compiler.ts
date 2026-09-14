@@ -1,6 +1,11 @@
 import type { ExpressionLimits, ExpressionProfile } from "kuery/expression";
 import type { CompiledRule, ProductionRule } from "./contracts.js";
-import { extractActionDeps, extractConditionDeps, extractRhsDeps } from "./dependency-extract.js";
+import {
+	extractActionDeps,
+	extractConditionDeps,
+	extractRhsDeps,
+	hasUnknownActionWrites,
+} from "./dependency-extract.js";
 import { ArbiterError, ArbiterErrorCode } from "./errors.js";
 import { arbitreV1 } from "./expression-profile.js";
 import { compileRuleComponents, freezeRuleDependencies } from "./rule-components.js";
@@ -29,7 +34,12 @@ export function compileRule(
 	const { condition, actions, elseActions, hasPatterns, patterns, accumulates } = components;
 	const allActions = elseActions ? [...actions, ...elseActions] : actions;
 	const rhsReads = extractRhsDeps(allActions);
-	const dependencies = freezeRuleDependencies(extractConditionDeps(condition), rhsReads, extractActionDeps(allActions));
+	const dependencies = freezeRuleDependencies(
+		extractConditionDeps(condition),
+		rhsReads,
+		extractActionDeps(allActions),
+		hasUnknownActionWrites(allActions),
+	);
 	return {
 		name: rule.name,
 		condition,

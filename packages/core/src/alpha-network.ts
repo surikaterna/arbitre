@@ -90,6 +90,7 @@ function freezeDependencies(input: RuleDependencies): RuleDependencies {
 		conditionReads: Object.freeze([...input.conditionReads]),
 		rhsReads: Object.freeze(input.rhsReads.map((reference) => Object.freeze({ ...reference }))),
 		actionWrites: Object.freeze([...input.actionWrites]),
+		...(input.actionWritesUnknown ? { actionWritesUnknown: true as const } : {}),
 		bindingReads: Object.freeze(input.bindingReads.map((reference) => Object.freeze({ ...reference }))),
 	});
 }

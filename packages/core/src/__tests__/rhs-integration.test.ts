@@ -84,6 +84,32 @@ describe("RHS live resolution and dependencies", () => {
 		});
 		session.fire();
 		expect(session.getPath("result")).toBe("raw:4");
+		expect(session.introspect.getRuleDependencies("effect")).toEqual({
+			conditionReads: [],
+			rhsReads: [],
+			actionWrites: [],
+			actionWritesUnknown: true,
+			bindingReads: [],
+		});
+	});
+
+	it("retains known paths and marks mixed custom writes unknown", () => {
+		const session = createSession({
+			thenOperators: {
+				register: () => {},
+				has: (name) => name === "$effect",
+				get: (name) => (name === "$effect" ? (_entries, _scope, write) => write("observed", true) : undefined),
+			},
+			rules: [{ name: "mixed", when: { trigger: true }, then: [{ $set: { known: 1 } }, { $effect: { fake: 1 } }] }],
+		});
+		const dependencies = session.introspect.getRuleDependencies("mixed")!;
+		expect(dependencies.actionWrites).toEqual(["known"]);
+		expect(dependencies.actionWritesUnknown).toBe(true);
+		expect(Object.isFrozen(dependencies)).toBe(true);
+		session.assert("trigger", true);
+		session.fire();
+		expect(session.getPath("known")).toBe(1);
+		expect(session.getPath("observed")).toBe(true);
 	});
 
 	it("classifies dependencies while only conditions schedule", () => {

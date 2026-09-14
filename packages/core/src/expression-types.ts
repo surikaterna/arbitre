@@ -30,6 +30,7 @@ export interface RuleDependencies {
 	readonly conditionReads: readonly string[];
 	readonly rhsReads: readonly ArbitreReference[];
 	readonly actionWrites: readonly string[];
+	readonly actionWritesUnknown?: true;
 	readonly bindingReads: readonly ArbitreReference[];
 }
 

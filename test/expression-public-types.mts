@@ -2,6 +2,7 @@ import {
 	type ArbitreReference,
 	type ArbitreValueExpression,
 	type ProductionRule,
+	type RuleDependencies,
 	arbitreV1,
 	createSession,
 	expression,
@@ -24,6 +25,15 @@ createSession({
 });
 
 arbitreV1.get("if");
+
+const dependencies: RuleDependencies = {
+	conditionReads: [],
+	rhsReads: [],
+	actionWrites: [],
+	actionWritesUnknown: true,
+	bindingReads: [],
+};
+void dependencies;
 
 // @ts-expect-error Structured references require a supported source.
 const invalid: ArbitreReference = { source: "global", path: "secret" };

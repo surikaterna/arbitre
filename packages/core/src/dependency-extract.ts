@@ -20,6 +20,8 @@ interface LiteralNode {
 
 type ExprLike = PathNode | OpNode | LiteralNode;
 
+const BUILT_IN_WRITE_OPERATORS = new Set(["$set", "$inc", "$push", "$merge", "$unset", "$pull"]);
+
 function isExprLike(node: unknown): node is ExprLike {
 	if (!isRecord(node)) return false;
 	return typeof node.kind === "string";
@@ -58,12 +60,16 @@ export function extractConditionDeps(condition: unknown): readonly string[] {
 export function extractActionDeps(stages: readonly CompiledStage[]): readonly string[] {
 	const paths = new Set<string>();
 	for (const stage of stages) {
-		if (stage.operator === "$focus") continue;
+		if (!BUILT_IN_WRITE_OPERATORS.has(stage.operator)) continue;
 		for (const path of stage.entries.keys()) {
 			paths.add(path);
 		}
 	}
 	return [...paths];
+}
+
+export function hasUnknownActionWrites(stages: readonly CompiledStage[]): boolean {
+	return stages.some((stage) => stage.operator !== "$focus" && !BUILT_IN_WRITE_OPERATORS.has(stage.operator));
 }
 
 export function extractRhsDeps(stages: readonly CompiledStage[]): readonly ArbitreReference[] {

@@ -56,12 +56,14 @@ export function freezeRuleDependencies(
 	conditionReads: readonly string[],
 	rhsReads: readonly ArbitreReference[],
 	actionWrites: readonly string[],
+	actionWritesUnknown = false,
 ): RuleDependencies {
 	const references = Object.freeze(rhsReads.map(freezeReference));
 	return Object.freeze({
 		conditionReads: Object.freeze([...conditionReads]),
 		rhsReads: references,
 		actionWrites: Object.freeze([...actionWrites]),
+		...(actionWritesUnknown ? { actionWritesUnknown: true as const } : {}),
 		bindingReads: Object.freeze(references.filter(({ source }) => source === "binding")),
 	});
 }
