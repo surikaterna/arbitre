@@ -1,36 +1,53 @@
 import { collectPath } from "kuery";
 import { splitPath, validatePath } from "./path-utils.js";
+import {
+	type LeafMutation,
+	type StoreSet,
+	type StoredPathValue,
+	type TrustedStore,
+	createStoreSet,
+	createTrustedStore,
+	materializeTrustedStore,
+	prepareStoreMutation,
+	readTrustedStoreOwn,
+	trustedStoreKeys,
+} from "./scope-storage-transaction.js";
 import { cloneState } from "./state-clone.js";
-import { isRecord } from "./type-guards.js";
+import { isSupportedStateContainer, materializeStateContainer } from "./state-container.js";
 
 export interface ResolvedNamespace {
 	readonly namespace: string;
 	readonly localPath: string;
 }
 
-export type OwnPathValue =
-	| { readonly kind: "absent" }
-	| { readonly kind: "data"; readonly value: unknown }
-	| { readonly kind: "uninspectable" };
+export type OwnPathValue = StoredPathValue | { readonly kind: "uninspectable" };
+
+export interface PreparedStorageChange {
+	readonly base: StoreSet;
+	readonly baseCache: Record<string, unknown> | null;
+	readonly next: StoreSet;
+	readonly previous: StoredPathValue;
+	readonly newValue: unknown;
+}
+
+export interface PathRestoration {
+	readonly path: string;
+	readonly previous: StoredPathValue;
+}
 
 export class ScopeStorage {
 	readonly registeredNamespaces: ReadonlySet<string>;
-	private readonly stores: Record<string, Record<string, unknown>>;
+	private stores: StoreSet;
 	private cachedReadView: Record<string, unknown> | null = null;
 
 	constructor(initialState?: Readonly<Record<string, unknown>>, namespaces?: readonly string[]) {
 		this.registeredNamespaces = new Set(["$meta", ...(namespaces ?? [])]);
-		this.stores = {
-			root: initialState ? cloneState(initialState) : {},
-		};
-		for (const namespace of this.registeredNamespaces) this.stores[namespace] = {};
+		this.stores = createStoreSet(initialState, this.registeredNamespaces);
 	}
 
 	readonly resolveNamespace = (path: string): ResolvedNamespace => {
 		for (const namespace of this.registeredNamespaces) {
-			if (path.startsWith(`${namespace}.`)) {
-				return { namespace, localPath: path.slice(namespace.length + 1) };
-			}
+			if (path.startsWith(`${namespace}.`)) return { namespace, localPath: path.slice(namespace.length + 1) };
 			if (path === namespace) return { namespace, localPath: "" };
 		}
 		return { namespace: "root", localPath: path };
@@ -39,93 +56,153 @@ export class ScopeStorage {
 	readonly read = (path: string): unknown => {
 		validatePath(path);
 		const { namespace, localPath } = this.resolveNamespace(path);
-		if (localPath === "") return this.store(namespace);
-		return deepGet(this.store(namespace), splitPath(localPath));
+		if (localPath === "") return readonlyStoreView(this.store(namespace));
+		const [first, ...remaining] = splitPath(localPath);
+		const value = readTrustedStoreOwn(this.store(namespace), first!);
+		if (value.kind === "absent") return undefined;
+		return remaining.length === 0 ? value.value : collectPath(value.value, remaining);
 	};
 
 	readonly readOwn = (path: string): OwnPathValue => {
 		validatePath(path);
 		const { namespace, localPath } = this.resolveNamespace(path);
 		if (localPath === "") return { kind: "data", value: this.store(namespace) };
-		return deepGetOwn(this.store(namespace), splitPath(localPath));
+		const [first, ...remaining] = splitPath(localPath);
+		const value = readTrustedStoreOwn(this.store(namespace), first!);
+		if (value.kind === "absent" || remaining.length === 0) return value;
+		if (value.value === null || typeof value.value !== "object") return { kind: "absent" };
+		return deepGetOwn(value.value as Record<string, unknown>, remaining);
 	};
 
 	readonly hasOwn = (path: string): boolean => this.readOwn(path).kind !== "absent";
 
-	readonly write = (path: string, value: unknown): boolean => {
-		const target = this.writeTarget(path);
-		if (!target) return false;
-		deepSet(target.store, target.segments, value);
+	prepareMutation(
+		path: string,
+		createIntermediates: boolean,
+		createMutation: (previous: StoredPathValue) => LeafMutation,
+	): PreparedStorageChange | undefined {
+		const target = this.pathTarget(path);
+		if (!target) return undefined;
+		const prepared = prepareStoreMutation(
+			this.stores,
+			target.namespace,
+			target.segments,
+			createIntermediates,
+			createMutation,
+		);
+		return {
+			base: this.stores,
+			baseCache: this.cachedReadView,
+			next: prepared.stores,
+			previous: prepared.previous,
+			newValue: prepared.newValue,
+		};
+	}
+
+	prepareRestorations(restorations: readonly PathRestoration[]): PreparedStorageChange {
+		let next = this.stores;
+		for (const restoration of restorations) next = this.restoreInto(next, restoration);
+		return {
+			base: this.stores,
+			baseCache: this.cachedReadView,
+			next,
+			previous: { kind: "absent" },
+			newValue: undefined,
+		};
+	}
+
+	prepareRestore(snapshot: unknown): PreparedStorageChange {
+		const next = this.materializeSnapshot(snapshot);
+		return {
+			base: this.stores,
+			baseCache: this.cachedReadView,
+			next,
+			previous: { kind: "absent" },
+			newValue: undefined,
+		};
+	}
+
+	commit(prepared: PreparedStorageChange): () => void {
+		if (this.stores !== prepared.base) throw new Error("Stale storage transaction");
+		this.stores = prepared.next;
 		this.cachedReadView = null;
-		return true;
-	};
+		return () => this.rollback(prepared);
+	}
 
-	readonly delete = (path: string): boolean => {
-		const target = this.writeTarget(path);
-		if (!target) return false;
-		deepDelete(target.store, target.segments);
-		this.cachedReadView = null;
-		return true;
-	};
+	rollback(prepared: PreparedStorageChange): void {
+		if (this.stores !== prepared.next) return;
+		this.stores = prepared.base;
+		this.cachedReadView = prepared.baseCache;
+	}
 
-	readonly restorePath = (path: string, value: unknown): void => {
-		if (value === undefined) this.delete(path);
-		else this.write(path, cloneState(value));
-	};
-
-	readonly getState = (): Readonly<Record<string, unknown>> => {
-		return Object.freeze(this.assembleView());
-	};
+	readonly getState = (): Readonly<Record<string, unknown>> => Object.freeze(this.assembleView());
 
 	readonly getReadView = (): Readonly<Record<string, unknown>> => {
 		if (!this.cachedReadView) this.cachedReadView = this.assembleView();
 		return this.cachedReadView;
 	};
 
-	readonly snapshot = (): unknown => cloneState(this.stores);
+	readonly snapshot = (): unknown => cloneState(this.materializeStores());
 
-	readonly restore = (snapshot: unknown): void => {
-		const snapped = cloneState(snapshot) as Record<string, Record<string, unknown>>;
+	private restoreInto(stores: StoreSet, restoration: PathRestoration): StoreSet {
+		const { namespace, localPath } = this.resolveNamespace(restoration.path);
+		if (localPath === "") return stores;
+		const previous = restoration.previous;
+		const mutation = () =>
+			previous.kind === "data"
+				? ({ kind: "write", value: cloneState(previous.value) } as const)
+				: ({ kind: "delete" } as const);
+		return prepareStoreMutation(stores, namespace, splitPath(localPath), previous.kind === "data", mutation).stores;
+	}
+
+	private materializeSnapshot(snapshot: unknown): StoreSet {
+		if (!isSupportedStateContainer(snapshot) || Array.isArray(snapshot)) throw new TypeError("Invalid scope snapshot");
+		const cloned = cloneState(snapshot);
+		const next = Object.create(null) as StoreSet;
 		for (const namespace of ["root", ...this.registeredNamespaces]) {
-			const store = this.store(namespace);
-			replaceStore(store, snapped[namespace]!);
+			const descriptor = Object.getOwnPropertyDescriptor(cloned, namespace);
+			if (!descriptor || !("value" in descriptor) || !isSupportedStateContainer(descriptor.value)) {
+				throw new TypeError("Invalid scope snapshot");
+			}
+			next[namespace] = createTrustedStore(materializeRecord(descriptor.value));
 		}
-		this.cachedReadView = null;
-	};
+		return next;
+	}
 
-	private store(namespace: string): Record<string, unknown> {
+	private pathTarget(path: string): { namespace: string; segments: readonly string[] } | undefined {
+		validatePath(path);
+		const { namespace, localPath } = this.resolveNamespace(path);
+		return localPath === "" ? undefined : { namespace, segments: splitPath(localPath) };
+	}
+
+	private store(namespace: string): TrustedStore {
 		return this.stores[namespace]!;
 	}
 
-	private writeTarget(path: string): { store: Record<string, unknown>; segments: readonly string[] } | undefined {
-		validatePath(path);
-		const { namespace, localPath } = this.resolveNamespace(path);
-		if (localPath === "") return undefined;
-		return { store: this.store(namespace), segments: splitPath(localPath) };
-	}
-
 	private assembleView(): Record<string, unknown> {
-		const result: Record<string, unknown> = { ...this.store("root") };
+		const result: Record<string, unknown> = { ...materializeTrustedStore(this.store("root")) };
 		for (const namespace of this.registeredNamespaces) {
 			const store = this.store(namespace);
-			if (Object.keys(store).length > 0) result[namespace] = store;
+			if (store.size > 0) result[namespace] = readonlyStoreView(store);
 		}
 		return result;
 	}
-}
 
-function deepGet(object: Record<string, unknown>, segments: readonly string[]): unknown {
-	return collectPath(object, segments);
+	private materializeStores(): Record<string, Record<string, unknown>> {
+		const stores = Object.create(null) as Record<string, Record<string, unknown>>;
+		for (const namespace of ["root", ...this.registeredNamespaces]) {
+			stores[namespace] = materializeTrustedStore(this.store(namespace));
+		}
+		return stores;
+	}
 }
 
 function deepGetOwn(object: Record<string, unknown>, segments: readonly string[]): OwnPathValue {
 	let current: object = object;
 	for (let index = 0; index < segments.length; index++) {
-		const segment = segments[index]!;
-		const descriptor = inspectOwnProperty(current, segment);
-		if (descriptor === null) return { kind: "uninspectable" };
+		const descriptor = inspectOwnProperty(current, segments[index]!);
+		if (descriptor === null || (descriptor && !("value" in descriptor))) return { kind: "uninspectable" };
 		if (!descriptor) return { kind: "absent" };
-		if (!("value" in descriptor)) return { kind: "uninspectable" };
 		if (index === segments.length - 1) return { kind: "data", value: descriptor.value };
 		if (descriptor.value === null || typeof descriptor.value !== "object") return { kind: "absent" };
 		current = descriptor.value;
@@ -141,44 +218,40 @@ function inspectOwnProperty(object: object, key: string): PropertyDescriptor | n
 	}
 }
 
-function replaceStore(target: Record<string, unknown>, source: Record<string, unknown>): void {
-	for (const key of Object.keys(target)) delete target[key];
-	const descriptors = Object.getOwnPropertyDescriptors(source);
-	for (const key of Object.keys(descriptors)) Object.defineProperty(target, key, descriptors[key]!);
+function materializeRecord(value: object): Record<string, unknown> {
+	const materialized = materializeStateContainer(value);
+	if (Array.isArray(materialized)) throw new TypeError("Invalid scope snapshot");
+	return materialized;
 }
 
-function deepSet(object: Record<string, unknown>, segments: readonly string[], value: unknown): void {
-	let current = object;
-	for (let index = 0; index < segments.length - 1; index++) {
-		const segment = segments[index]!;
-		const descriptor = Object.getOwnPropertyDescriptor(current, segment);
-		const next = descriptor && "value" in descriptor ? descriptor.value : undefined;
-		if (isRecord(next)) current = next;
-		else {
-			const created: Record<string, unknown> = {};
-			defineDataProperty(current, segment, created);
-			current = created;
-		}
-	}
-	defineDataProperty(current, segments[segments.length - 1]!, value);
+const readonlyViews = new WeakMap<TrustedStore, Record<string, unknown>>();
+
+function readonlyStoreView(store: TrustedStore): Record<string, unknown> {
+	const existing = readonlyViews.get(store);
+	if (existing) return existing;
+	const view = new Proxy(Object.create(store.prototype) as Record<string, unknown>, {
+		get: (_target, key) => (typeof key === "string" ? storedValue(readTrustedStoreOwn(store, key)) : undefined),
+		has: (_target, key) => typeof key === "string" && readTrustedStoreOwn(store, key).kind === "data",
+		ownKeys: () => [...trustedStoreKeys(store)],
+		getOwnPropertyDescriptor: (_target, key) => viewDescriptor(store, key),
+		set: () => false,
+		defineProperty: () => false,
+		deleteProperty: () => false,
+		setPrototypeOf: () => false,
+		preventExtensions: () => false,
+	});
+	readonlyViews.set(store, view);
+	return view;
 }
 
-function deepDelete(object: Record<string, unknown>, segments: readonly string[]): void {
-	let current = object;
-	for (let index = 0; index < segments.length - 1; index++) {
-		const descriptor = Object.getOwnPropertyDescriptor(current, segments[index]!);
-		const next = descriptor && "value" in descriptor ? descriptor.value : undefined;
-		if (!isRecord(next)) return;
-		current = next;
-	}
-	delete current[segments[segments.length - 1]!];
+function viewDescriptor(store: TrustedStore, key: PropertyKey): PropertyDescriptor | undefined {
+	if (typeof key !== "string") return undefined;
+	const value = readTrustedStoreOwn(store, key);
+	return value.kind === "data"
+		? { configurable: true, enumerable: true, writable: false, value: value.value }
+		: undefined;
 }
 
-function defineDataProperty(object: Record<string, unknown>, key: string, value: unknown): void {
-	const descriptor = Object.getOwnPropertyDescriptor(object, key);
-	if ((descriptor && "value" in descriptor && descriptor.writable) || (!descriptor && !Reflect.has(object, key))) {
-		object[key] = value;
-		return;
-	}
-	Object.defineProperty(object, key, { configurable: true, enumerable: true, writable: true, value });
+function storedValue(value: StoredPathValue): unknown {
+	return value.kind === "data" ? value.value : undefined;
 }
