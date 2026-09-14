@@ -10,11 +10,9 @@ export function measureMedian<T>(createWorkload: () => () => T): TimingResult<T>
 	const samples: number[] = [];
 	for (let index = 0; index < 5; index++) {
 		const workload = createWorkload();
-		// CPU duration preserves regression sensitivity without counting unrelated host scheduling delays.
-		const start = process.cpuUsage();
+		const start = performance.now();
 		results.push(workload());
-		const usage = process.cpuUsage(start);
-		samples.push((usage.user + usage.system) / 1_000);
+		samples.push(performance.now() - start);
 	}
 	const ordered = [...samples].sort((left, right) => left - right);
 	return { median: ordered[Math.floor(ordered.length / 2)]!, samples, results };
