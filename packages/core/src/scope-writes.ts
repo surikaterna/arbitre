@@ -1,14 +1,10 @@
 import type { WriteRecord } from "./contracts.js";
 import { ArbiterError, ArbiterErrorCode } from "./errors.js";
 import type { ScopeProvenance } from "./scope-provenance.js";
-import { type LeafMutation, type StoredPathValue, appendToArray } from "./scope-storage-transaction.js";
-import type { PreparedStorageChange, ScopeStorage } from "./scope-storage.js";
-import { UnsafeStateContainerError, defineTrustedValue, materializeStateContainer } from "./state-container.js";
+import type { ScopeStorage } from "./scope-storage.js";
+import { cloneState } from "./state-clone.js";
 
-export interface ScopeMutationResult extends WriteRecord {
-	readonly previousValue: unknown;
-	readonly newValue: unknown;
-}
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 export class ScopeWrites {
 	constructor(
@@ -16,114 +12,95 @@ export class ScopeWrites {
 		private readonly provenance: ScopeProvenance,
 	) {}
 
-	readonly set = (path: string, value: unknown, ruleName: string): ScopeMutationResult | undefined => {
-		return this.mutate(path, true, () => ({ kind: "write", value }), ruleName);
+	readonly set = (path: string, value: unknown, ruleName: string): WriteRecord | undefined => {
+		return this.commit(path, value, this.storage.read(path), ruleName);
 	};
 
-	readonly unset = (path: string, ruleName: string): ScopeMutationResult | undefined => {
-		return this.mutate(path, false, () => ({ kind: "delete" }), ruleName);
+	readonly unset = (path: string, ruleName: string): WriteRecord | undefined => {
+		const previous = this.storage.read(path);
+		if (!this.storage.delete(path)) return undefined;
+		return this.provenance.record(path, undefined, previous, ruleName);
 	};
 
-	readonly push = (path: string, value: unknown, ruleName: string): ScopeMutationResult | undefined => {
-		return this.mutate(
-			path,
-			true,
-			(previous) => ({ kind: "write", value: appendToArray(storedValue(previous), value) }),
-			ruleName,
-		);
+	readonly push = (path: string, value: unknown, ruleName: string): WriteRecord | undefined => {
+		const previous = this.storage.read(path);
+		const next = Array.isArray(previous) ? [...previous, value] : [value];
+		return this.commit(path, next, previous, ruleName);
 	};
 
-	readonly inc = (path: string, amount: unknown, ruleName: string): ScopeMutationResult | undefined => {
+	readonly inc = (path: string, amount: unknown, ruleName: string): WriteRecord | undefined => {
+		let inspected: ReturnType<ScopeStorage["readOwn"]>;
 		try {
-			if (!isFiniteNumber(amount)) throw new Error("amount");
-			return this.mutate(path, true, (previous) => increment(previous, amount), ruleName);
-		} catch (error) {
-			if (error instanceof ArbiterError) throw error;
-			throwWriteError("inc", path, ruleName, incReason(error));
+			inspected = this.storage.readOwn(path);
+		} catch {
+			throwWriteError("inc", path, ruleName, "existing value could not be inspected");
 		}
+		if (!isFiniteNumber(amount)) throwWriteError("inc", path, ruleName, "amount must be finite");
+		if (inspected.kind === "uninspectable") {
+			throwWriteError("inc", path, ruleName, "existing value is not a data property");
+		}
+		if (inspected.kind === "data" && !isFiniteNumber(inspected.value)) {
+			throwWriteError("inc", path, ruleName, "existing value must be finite");
+		}
+		const base = inspected.kind === "data" ? (inspected.value as number) : 0;
+		const result = base + amount;
+		if (!Number.isFinite(result)) throwWriteError("inc", path, ruleName, "result must be finite");
+		return this.commit(path, result, inspected.kind === "data" ? inspected.value : undefined, ruleName);
 	};
 
-	readonly merge = (path: string, value: unknown, ruleName: string): ScopeMutationResult | undefined => {
+	readonly merge = (path: string, value: unknown, ruleName: string): WriteRecord | undefined => {
 		try {
-			const rhs = inspectMergeObject(value);
-			return this.mutate(path, true, (previous) => mergeValue(previous, rhs), ruleName);
-		} catch (error) {
-			if (error instanceof ArbiterError) throw error;
+			const current = this.storage.readOwn(path);
+			const rhs = inspectPlainDataObject(value);
+			if (current.kind === "uninspectable") throw new Error("target is not data");
+			const target = current.kind === "data" ? inspectPlainDataObject(current.value) : undefined;
+			const merged = target ? materializeObject(target.prototype, target, rhs) : materializeObject(rhs.prototype, rhs);
+			const previous = target ? cloneState(materializeObject(target.prototype, target)) : undefined;
+			return this.commit(path, merged, previous, ruleName);
+		} catch {
 			throwWriteError("merge", path, ruleName, "value must be a descriptor-safe plain object");
 		}
 	};
 
-	private mutate(
-		path: string,
-		createIntermediates: boolean,
-		createMutation: (previous: StoredPathValue) => LeafMutation,
-		ruleName: string,
-	): ScopeMutationResult | undefined {
-		const storage = this.storage.prepareMutation(path, createIntermediates, createMutation);
-		if (!storage) return undefined;
-		return this.commit(storage, path, ruleName);
+	private commit(path: string, value: unknown, previous: unknown, ruleName: string): WriteRecord | undefined {
+		if (!this.storage.write(path, value)) return undefined;
+		return this.provenance.record(path, value, previous, ruleName);
 	}
+}
 
-	private commit(storage: PreparedStorageChange, path: string, ruleName: string): ScopeMutationResult {
-		const provenance = this.provenance.prepareRecord(path, storage.newValue, storage.previous, ruleName);
-		let rollbackStorage: () => void;
-		try {
-			rollbackStorage = this.storage.commit(storage);
-		} catch (error) {
-			this.storage.rollback(storage);
-			throw error;
+interface InspectedObject {
+	readonly prototype: object | null;
+	readonly descriptors: PropertyDescriptorMap;
+}
+
+function inspectPlainDataObject(value: unknown): InspectedObject {
+	if (value === null || typeof value !== "object") throw new Error("not an object");
+	const prototype = Object.getPrototypeOf(value);
+	if (prototype !== Object.prototype && prototype !== null) throw new Error("not plain");
+	const keys = Reflect.ownKeys(value);
+	const descriptors = Object.getOwnPropertyDescriptors(value);
+	for (const key of keys) validateDescriptor(key, typeof key === "string" ? descriptors[key] : undefined);
+	return { prototype, descriptors };
+}
+
+function validateDescriptor(key: PropertyKey, descriptor: PropertyDescriptor | undefined): void {
+	if (typeof key !== "string" || UNSAFE_KEYS.has(key)) throw new Error("unsafe key");
+	if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) throw new Error("unsafe descriptor");
+}
+
+function materializeObject(prototype: object | null, ...sources: readonly InspectedObject[]): Record<string, unknown> {
+	const result = Object.create(prototype) as Record<string, unknown>;
+	for (const { descriptors } of sources) {
+		for (const key of Object.keys(descriptors)) {
+			Object.defineProperty(result, key, {
+				configurable: true,
+				enumerable: true,
+				writable: true,
+				value: descriptors[key]!.value,
+			});
 		}
-		try {
-			this.provenance.commit(provenance);
-		} catch (error) {
-			this.provenance.rollback(provenance);
-			rollbackStorage();
-			throw error;
-		}
-		return {
-			...provenance.record,
-			previousValue: storedValue(storage.previous),
-			newValue: storage.newValue,
-		};
 	}
-}
-
-function increment(previous: StoredPathValue, amount: number): LeafMutation {
-	if (previous.kind === "data" && !isFiniteNumber(previous.value)) throw new Error("existing");
-	const base = previous.kind === "data" ? (previous.value as number) : 0;
-	const result = base + amount;
-	if (!Number.isFinite(result)) throw new Error("result");
-	return { kind: "write", value: result };
-}
-
-function incReason(error: unknown): string {
-	if (error instanceof Error && error.message === "amount") return "amount must be finite";
-	if (error instanceof Error && error.message === "existing") return "existing value must be finite";
-	if (error instanceof Error && error.message === "result") return "result must be finite";
-	if (error instanceof UnsafeStateContainerError && error.reason === "accessor") {
-		return "existing value is not a data property";
-	}
-	return "existing value could not be inspected";
-}
-
-function inspectMergeObject(value: unknown): Record<string, unknown> {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("not plain");
-	const materialized = materializeStateContainer(value);
-	if (Array.isArray(materialized)) throw new Error("not plain");
-	return materialized;
-}
-
-function mergeValue(previous: StoredPathValue, rhs: Record<string, unknown>): LeafMutation {
-	const target = previous.kind === "data" ? inspectMergeObject(previous.value) : undefined;
-	const result = target ?? Object.create(Object.getPrototypeOf(rhs));
-	for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(rhs))) {
-		defineTrustedValue(result, key, descriptor.value);
-	}
-	return { kind: "write", value: result };
-}
-
-function storedValue(value: StoredPathValue): unknown {
-	return value.kind === "data" ? value.value : undefined;
+	return result;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -134,6 +111,9 @@ function throwWriteError(operator: "inc" | "merge", path: string, ruleName: stri
 	throw new ArbiterError(
 		ArbiterErrorCode.EXPRESSION_EVALUATION_FAILED,
 		`${operator} failed for rule "${ruleName}" at ${path}`,
-		{ ruleName, details: { ruleName, path, reason } },
+		{
+			ruleName,
+			details: { ruleName, path, reason },
+		},
 	);
 }

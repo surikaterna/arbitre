@@ -6,7 +6,6 @@ import type { CompiledStage, StateChange, ThenOperatorRegistry } from "./contrac
 import { ArbiterError, ArbiterErrorCode } from "./errors.js";
 import { evaluateArbitreValue } from "./expression-runtime.js";
 import type { CompiledArbitreValue } from "./expression-types.js";
-import type { ScopeMutationResult } from "./scope-writes.js";
 import type { ScopeManager } from "./scope.js";
 
 export interface StageExecContext {
@@ -52,13 +51,14 @@ function executeValues(
 	stage: CompiledStage,
 	ruleName: string,
 	ctx: StageExecContext,
-	write: (path: string, value: unknown) => ScopeMutationResult | undefined,
+	write: (path: string, value: unknown) => void,
 ): StateChange[] {
 	const changes: StateChange[] = [];
 	for (const [path, compiled] of stage.entries) {
 		const value = evaluateStageValue(stage, path, compiled as CompiledArbitreValue, ruleName, ctx);
-		const result = write(path, value);
-		if (result) changes.push(toStateChange(result));
+		const previousValue = ctx.scope.get(path);
+		write(path, value);
+		changes.push({ path, previousValue, newValue: ctx.scope.get(path), ruleName });
 	}
 	return changes;
 }
@@ -89,8 +89,9 @@ function isEvaluationError(error: unknown): error is ArbiterError {
 function executeUnset(stage: CompiledStage, ruleName: string, ctx: StageExecContext): StateChange[] {
 	const changes: StateChange[] = [];
 	for (const path of stage.entries.keys()) {
-		const result = ctx.scope.unset(path, ruleName);
-		if (result) changes.push(toStateChange(result));
+		const previousValue = ctx.scope.get(path);
+		ctx.scope.unset(path, ruleName);
+		changes.push({ path, previousValue, newValue: undefined, ruleName });
 	}
 	return changes;
 }
@@ -101,8 +102,8 @@ function executePull(stage: CompiledStage, ruleName: string, ctx: StageExecConte
 		const previousValue = ctx.scope.get(path);
 		if (!Array.isArray(previousValue)) continue;
 		const value = previousValue.filter((item) => !evaluate(predicate as ExprNode, item as Record<string, unknown>));
-		const result = ctx.scope.set(path, value, ruleName);
-		if (result) changes.push(toStateChange(result));
+		ctx.scope.set(path, value, ruleName);
+		changes.push({ path, previousValue, newValue: value, ruleName });
 	}
 	return changes;
 }
@@ -114,17 +115,9 @@ function executeCustomOperator(stage: CompiledStage, ruleName: string, ctx: Stag
 	}
 	const changes: StateChange[] = [];
 	handler(stage.entries, ctx.scope.getReadView(), (path, value) => {
-		const result = ctx.scope.set(path, value, ruleName);
-		if (result) changes.push(toStateChange(result));
+		const previousValue = ctx.scope.get(path);
+		ctx.scope.set(path, value, ruleName);
+		changes.push({ path, previousValue, newValue: value, ruleName });
 	});
 	return changes;
-}
-
-function toStateChange(result: ScopeMutationResult): StateChange {
-	return {
-		path: result.path,
-		previousValue: result.previousValue,
-		newValue: result.newValue,
-		ruleName: result.ruleName,
-	};
 }

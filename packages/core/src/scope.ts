@@ -1,18 +1,19 @@
-import { type PreparedProvenanceChange, ScopeProvenance } from "./scope-provenance.js";
-import { type PreparedStorageChange, ScopeStorage } from "./scope-storage.js";
-import { type ScopeMutationResult, ScopeWrites } from "./scope-writes.js";
+import type { WriteRecord } from "./contracts.js";
+import { ScopeProvenance } from "./scope-provenance.js";
+import { ScopeStorage } from "./scope-storage.js";
+import { ScopeWrites } from "./scope-writes.js";
 
 export type Namespace = "root" | "$meta" | string;
 
 export interface ScopeManager {
 	readonly get: (path: string) => unknown;
 	readonly hasOwn: (path: string) => boolean;
-	readonly set: (path: string, value: unknown, ruleName: string) => ScopeMutationResult | undefined;
-	readonly unset: (path: string, ruleName: string) => ScopeMutationResult | undefined;
-	readonly push: (path: string, value: unknown, ruleName: string) => ScopeMutationResult | undefined;
-	readonly inc: (path: string, amount: unknown, ruleName: string) => ScopeMutationResult | undefined;
-	readonly merge: (path: string, value: unknown, ruleName: string) => ScopeMutationResult | undefined;
-	readonly getWriteRecords: ScopeProvenance["getWriteRecords"];
+	readonly set: (path: string, value: unknown, ruleName: string) => WriteRecord | undefined;
+	readonly unset: (path: string, ruleName: string) => WriteRecord | undefined;
+	readonly push: (path: string, value: unknown, ruleName: string) => WriteRecord | undefined;
+	readonly inc: (path: string, amount: unknown, ruleName: string) => WriteRecord | undefined;
+	readonly merge: (path: string, value: unknown, ruleName: string) => WriteRecord | undefined;
+	readonly getWriteRecords: (ruleName: string) => readonly WriteRecord[];
 	readonly revertRule: (ruleName: string) => readonly string[];
 	readonly clearWriteRecords: (ruleName: string) => void;
 	readonly getState: () => Readonly<Record<string, unknown>>;
@@ -28,7 +29,7 @@ export function createScopeManager(
 	namespaces?: readonly string[],
 ): ScopeManager {
 	const storage = new ScopeStorage(initialState, namespaces);
-	const provenance = new ScopeProvenance();
+	const provenance = new ScopeProvenance(storage.restorePath);
 	const writes = new ScopeWrites(storage, provenance);
 	return assembleScopeManager(storage, provenance, writes);
 }
@@ -43,7 +44,7 @@ function assembleScopeManager(storage: ScopeStorage, provenance: ScopeProvenance
 		inc: writes.inc,
 		merge: writes.merge,
 		getWriteRecords: provenance.getWriteRecords,
-		revertRule: (ruleName) => revertRule(ruleName, storage, provenance),
+		revertRule: provenance.revertRule,
 		clearWriteRecords: provenance.clearWriteRecords,
 		getState: storage.getState,
 		getReadView: storage.getReadView,
@@ -55,36 +56,6 @@ function assembleScopeManager(storage: ScopeStorage, provenance: ScopeProvenance
 }
 
 function restoreScope(snapshot: unknown, storage: ScopeStorage, provenance: ScopeProvenance): void {
-	const preparedStorage = storage.prepareRestore(snapshot);
-	commitScopeChange(preparedStorage, provenance.prepareClear(), storage, provenance);
-}
-
-function revertRule(ruleName: string, storage: ScopeStorage, provenance: ScopeProvenance): readonly string[] {
-	const preparedProvenance = provenance.prepareRevert(ruleName);
-	if (!preparedProvenance) return [];
-	const preparedStorage = storage.prepareRestorations(preparedProvenance.restorations);
-	commitScopeChange(preparedStorage, preparedProvenance, storage, provenance);
-	return preparedProvenance.paths;
-}
-
-function commitScopeChange(
-	preparedStorage: PreparedStorageChange,
-	preparedProvenance: PreparedProvenanceChange,
-	storage: ScopeStorage,
-	provenance: ScopeProvenance,
-): void {
-	let rollbackStorage: () => void;
-	try {
-		rollbackStorage = storage.commit(preparedStorage);
-	} catch (error) {
-		storage.rollback(preparedStorage);
-		throw error;
-	}
-	try {
-		provenance.commit(preparedProvenance);
-	} catch (error) {
-		provenance.rollback(preparedProvenance);
-		rollbackStorage();
-		throw error;
-	}
+	storage.restore(snapshot);
+	provenance.clear();
 }

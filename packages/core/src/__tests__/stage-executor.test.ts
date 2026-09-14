@@ -58,16 +58,6 @@ describe("$set operator", () => {
 		executeStages([stage("$set", { "$ui.panel.visible": true })], "r1", ctx);
 		expect(ctx.scope.get("$ui.panel.visible")).toBe(true);
 	});
-
-	it("preserves ordered entry visibility and reports internal mutation values", () => {
-		const ctx = makeCtx({ first: 0 });
-		const changes = executeStages([stage("$set", { first: 1, second: "$first" })], "r1", ctx);
-		expect(ctx.scope.get("second")).toBe(1);
-		expect(changes).toEqual([
-			{ path: "first", previousValue: 0, newValue: 1, ruleName: "r1" },
-			{ path: "second", previousValue: undefined, newValue: 1, ruleName: "r1" },
-		]);
-	});
 });
 
 // ---------------------------------------------------------------------------
@@ -160,16 +150,6 @@ describe("$pull operator", () => {
 		const changes = executeStages([{ operator: "$pull", entries: new Map([["items", predicate]]) }], "r1", ctx);
 		expect(changes).toHaveLength(0);
 	});
-
-	it("detaches a proxied parent without invoking mutation traps", () => {
-		const { proxy, target, mutationCount } = mutationTrapProxy({ items: [{ id: 1 }, { id: 2 }] });
-		const ctx = makeCtx({ holder: proxy });
-		const predicate = compile({ id: 2 });
-		executeStages([{ operator: "$pull", entries: new Map([["holder.items", predicate]]) }], "r1", ctx);
-		expect(ctx.scope.get("holder.items")).toEqual([{ id: 1 }]);
-		expect(target.items).toEqual([{ id: 1 }, { id: 2 }]);
-		expect(mutationCount()).toBe(0);
-	});
 });
 
 // ---------------------------------------------------------------------------
@@ -246,65 +226,4 @@ describe("custom then operators", () => {
 		const ctx = makeCtx({}, { thenOperators: registry });
 		expect(() => executeStages([stage("$notfound", { x: 1 })], "r1", ctx)).toThrow('Unknown then operator "$notfound"');
 	});
-
-	it("uses the mutation result without reading an unsafe written value", () => {
-		let reads = 0;
-		const written = new Proxy(
-			{},
-			{
-				get: () => {
-					reads++;
-					return undefined;
-				},
-			},
-		);
-		const registry = customRegistry((write) => write("result", written));
-		const ctx = makeCtx({}, { thenOperators: registry });
-		const changes = executeStages([stage("$custom", {})], "r1", ctx);
-		expect(changes[0]?.newValue).toBe(written);
-		expect(reads).toBe(0);
-	});
-
-	it("detaches a proxied parent without invoking mutation traps", () => {
-		const { proxy, target, mutationCount } = mutationTrapProxy({ value: 1 });
-		const registry = customRegistry((write) => write("holder.value", 2));
-		const ctx = makeCtx({ holder: proxy }, { thenOperators: registry });
-		executeStages([stage("$custom", {})], "r1", ctx);
-		expect(ctx.scope.get("holder.value")).toBe(2);
-		expect(target.value).toBe(1);
-		expect(mutationCount()).toBe(0);
-	});
 });
-
-function mutationTrapProxy<T extends Record<string, unknown>>(
-	target: T,
-): {
-	readonly proxy: T;
-	readonly target: T;
-	readonly mutationCount: () => number;
-} {
-	let mutations = 0;
-	const proxy = new Proxy(target, {
-		set: (object, key, value) => {
-			mutations++;
-			return Reflect.set(object, key, value);
-		},
-		defineProperty: (object, key, descriptor) => {
-			mutations++;
-			return Reflect.defineProperty(object, key, descriptor);
-		},
-		deleteProperty: (object, key) => {
-			mutations++;
-			return Reflect.deleteProperty(object, key);
-		},
-	});
-	return { proxy, target, mutationCount: () => mutations };
-}
-
-function customRegistry(run: (write: (path: string, value: unknown) => void) => void): ThenOperatorRegistry {
-	return {
-		register: () => {},
-		has: () => true,
-		get: () => (_entries, _scope, write) => run(write),
-	};
-}

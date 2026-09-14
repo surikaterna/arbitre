@@ -58,18 +58,20 @@ describe("strict $inc writes", () => {
 	});
 
 	it("contains descriptor traps without mutation or provenance", () => {
-		const target = Object.defineProperty({}, "count", { configurable: true, enumerable: true, value: 1 });
-		const holder = new Proxy(target, {
-			getOwnPropertyDescriptor: () => {
-				throw new Error("secret");
+		const holder = new Proxy(
+			{},
+			{
+				getOwnPropertyDescriptor: () => {
+					throw new Error("secret");
+				},
 			},
-		});
+		);
 		const scope = preparedScope(holder, "holder");
 		const error = captureError(() => scope.inc("holder.count", 1, "inc"));
 		expect(error.details).toEqual({
 			ruleName: "inc",
 			path: "holder.count",
-			reason: "existing value could not be inspected",
+			reason: "existing value is not a data property",
 		});
 		expect(scope.get("holder")).toBe(holder);
 		expect(scope.getWriteRecords("inc")).toEqual([]);
