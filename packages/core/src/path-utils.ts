@@ -44,15 +44,3 @@ export function matchWildcardPath(pattern: string, concrete: string): boolean {
 
 	return patternSegments.every((seg, i) => seg === "*" || seg === concreteSegments[i]);
 }
-
-/**
- * Returns true if value is an object with at least one `$`-prefixed key,
- * indicating it's an expression rather than a literal.
- */
-export function isExpression(value: unknown): boolean {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) {
-		return false;
-	}
-	const keys = Object.keys(value as Record<string, unknown>);
-	return keys.length > 0 && keys.some((k) => k.startsWith("$"));
-}

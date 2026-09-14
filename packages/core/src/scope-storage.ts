@@ -1,5 +1,6 @@
 import { collectPath } from "kuery";
 import { splitPath, validatePath } from "./path-utils.js";
+import { cloneState } from "./state-clone.js";
 import { isRecord } from "./type-guards.js";
 
 export interface ResolvedNamespace {
@@ -7,10 +8,10 @@ export interface ResolvedNamespace {
 	readonly localPath: string;
 }
 
-export interface OwnPathValue {
-	readonly exists: boolean;
-	readonly value?: unknown;
-}
+export type OwnPathValue =
+	| { readonly kind: "absent" }
+	| { readonly kind: "data"; readonly value: unknown }
+	| { readonly kind: "uninspectable" };
 
 export class ScopeStorage {
 	readonly registeredNamespaces: ReadonlySet<string>;
@@ -20,7 +21,7 @@ export class ScopeStorage {
 	constructor(initialState?: Readonly<Record<string, unknown>>, namespaces?: readonly string[]) {
 		this.registeredNamespaces = new Set(["$meta", ...(namespaces ?? [])]);
 		this.stores = {
-			root: initialState ? (structuredClone(initialState) as Record<string, unknown>) : {},
+			root: initialState ? cloneState(initialState) : {},
 		};
 		for (const namespace of this.registeredNamespaces) this.stores[namespace] = {};
 	}
@@ -45,11 +46,11 @@ export class ScopeStorage {
 	readonly readOwn = (path: string): OwnPathValue => {
 		validatePath(path);
 		const { namespace, localPath } = this.resolveNamespace(path);
-		if (localPath === "") return { exists: true, value: this.store(namespace) };
+		if (localPath === "") return { kind: "data", value: this.store(namespace) };
 		return deepGetOwn(this.store(namespace), splitPath(localPath));
 	};
 
-	readonly hasOwn = (path: string): boolean => this.readOwn(path).exists;
+	readonly hasOwn = (path: string): boolean => this.readOwn(path).kind !== "absent";
 
 	readonly write = (path: string, value: unknown): boolean => {
 		const target = this.writeTarget(path);
@@ -69,7 +70,7 @@ export class ScopeStorage {
 
 	readonly restorePath = (path: string, value: unknown): void => {
 		if (value === undefined) this.delete(path);
-		else this.write(path, structuredClone(value));
+		else this.write(path, cloneState(value));
 	};
 
 	readonly getState = (): Readonly<Record<string, unknown>> => {
@@ -81,14 +82,13 @@ export class ScopeStorage {
 		return this.cachedReadView;
 	};
 
-	readonly snapshot = (): unknown => structuredClone(this.stores);
+	readonly snapshot = (): unknown => cloneState(this.stores);
 
 	readonly restore = (snapshot: unknown): void => {
-		const snapped = snapshot as Record<string, Record<string, unknown>>;
+		const snapped = cloneState(snapshot) as Record<string, Record<string, unknown>>;
 		for (const namespace of ["root", ...this.registeredNamespaces]) {
 			const store = this.store(namespace);
-			for (const key of Object.keys(store)) delete store[key];
-			Object.assign(store, snapped[namespace]);
+			replaceStore(store, snapped[namespace]!);
 		}
 		this.cachedReadView = null;
 	};
@@ -122,13 +122,29 @@ function deepGetOwn(object: Record<string, unknown>, segments: readonly string[]
 	let current: object = object;
 	for (let index = 0; index < segments.length; index++) {
 		const segment = segments[index]!;
-		const descriptor = Object.getOwnPropertyDescriptor(current, segment);
-		if (!descriptor || !("value" in descriptor)) return { exists: false };
-		if (index === segments.length - 1) return { exists: true, value: descriptor.value };
-		if (descriptor.value === null || typeof descriptor.value !== "object") return { exists: false };
+		const descriptor = inspectOwnProperty(current, segment);
+		if (descriptor === null) return { kind: "uninspectable" };
+		if (!descriptor) return { kind: "absent" };
+		if (!("value" in descriptor)) return { kind: "uninspectable" };
+		if (index === segments.length - 1) return { kind: "data", value: descriptor.value };
+		if (descriptor.value === null || typeof descriptor.value !== "object") return { kind: "absent" };
 		current = descriptor.value;
 	}
-	return { exists: false };
+	return { kind: "absent" };
+}
+
+function inspectOwnProperty(object: object, key: string): PropertyDescriptor | null | undefined {
+	try {
+		return Object.getOwnPropertyDescriptor(object, key);
+	} catch {
+		return null;
+	}
+}
+
+function replaceStore(target: Record<string, unknown>, source: Record<string, unknown>): void {
+	for (const key of Object.keys(target)) delete target[key];
+	const descriptors = Object.getOwnPropertyDescriptors(source);
+	for (const key of Object.keys(descriptors)) Object.defineProperty(target, key, descriptors[key]!);
 }
 
 function deepSet(object: Record<string, unknown>, segments: readonly string[], value: unknown): void {

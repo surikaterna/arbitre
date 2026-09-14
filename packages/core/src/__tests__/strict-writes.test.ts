@@ -36,6 +36,47 @@ describe("strict $inc writes", () => {
 		expectWriteFailure(() => scope.inc("count", Number.MAX_VALUE, "inc"), scope, "count", Number.MAX_VALUE);
 	});
 
+	it("rejects an own accessor as existing without invoking it", () => {
+		let reads = 0;
+		const holder = Object.defineProperty({}, "count", {
+			enumerable: true,
+			get: () => {
+				reads++;
+				return 4;
+			},
+		});
+		const scope = preparedScope(holder, "holder");
+		expect(scope.hasOwn("holder.count")).toBe(true);
+		const error = captureError(() => scope.inc("holder.count", 1, "inc"));
+		expect(error.details).toEqual({
+			ruleName: "inc",
+			path: "holder.count",
+			reason: "existing value is not a data property",
+		});
+		expect(reads).toBe(0);
+		expect(scope.getWriteRecords("inc")).toEqual([]);
+	});
+
+	it("contains descriptor traps without mutation or provenance", () => {
+		const holder = new Proxy(
+			{},
+			{
+				getOwnPropertyDescriptor: () => {
+					throw new Error("secret");
+				},
+			},
+		);
+		const scope = preparedScope(holder, "holder");
+		const error = captureError(() => scope.inc("holder.count", 1, "inc"));
+		expect(error.details).toEqual({
+			ruleName: "inc",
+			path: "holder.count",
+			reason: "existing value is not a data property",
+		});
+		expect(scope.get("holder")).toBe(holder);
+		expect(scope.getWriteRecords("inc")).toEqual([]);
+	});
+
 	it("applies strict validation to literal and referenced amounts", () => {
 		const literal = createSession({
 			initialState: { count: 2 },
@@ -59,6 +100,51 @@ describe("strict $inc writes", () => {
 });
 
 describe("strict $merge writes", () => {
+	it("materializes frozen public-stage values for override and later writes", () => {
+		const session = createSession({
+			rules: [
+				{
+					name: "stages",
+					when: {},
+					then: [
+						{ $set: { config: { kept: 1, changed: 1 } } },
+						{ $merge: { config: { changed: 2, added: 3 } } },
+						{ $set: { "config.added": 4 } },
+						{ $merge: { config: { repeated: true } } },
+					],
+				},
+			],
+		});
+		session.fire();
+		const config = session.getPath("config") as Record<string, unknown>;
+		expect(config).toEqual({ kept: 1, changed: 2, added: 4, repeated: true });
+		for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(config))) {
+			expect(descriptor).toMatchObject({ configurable: true, enumerable: true, writable: true });
+		}
+	});
+
+	it("preserves an existing null prototype through public stages", () => {
+		const existing = createSession({
+			rules: [{ name: "existing", when: {}, then: [{ $merge: { config: { added: 2 } } }] }],
+		});
+		existing.assert("config", Object.assign(Object.create(null), { kept: 1 }));
+		existing.fire();
+		const config = existing.getPath("config") as Record<string, unknown>;
+		expect(Object.getPrototypeOf(config)).toBeNull();
+		expect({ ...config }).toEqual({ kept: 1, added: 2 });
+	});
+
+	it("preserves recursive null prototypes through provenance reversion", () => {
+		const nested = Object.assign(Object.create(null) as Record<string, unknown>, { value: 1 });
+		const config = Object.assign(Object.create(null) as Record<string, unknown>, { nested });
+		const scope = preparedScope(config, "config");
+		scope.set("config", { replacement: true }, "writer");
+		expect(scope.revertRule("writer")).toEqual(["config"]);
+		const restored = scope.get("config") as Record<string, Record<string, unknown>>;
+		expect(Object.getPrototypeOf(restored)).toBeNull();
+		expect(Object.getPrototypeOf(restored.nested)).toBeNull();
+		expect(restored.nested.value).toBe(1);
+	});
 	it("copies a missing RHS and preserves its null prototype", () => {
 		const scope = createScopeManager();
 		const rhs = Object.assign(Object.create(null) as Record<string, unknown>, { added: 1 });

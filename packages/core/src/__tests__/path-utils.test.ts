@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isExpression, isWildcardPath, matchWildcardPath, splitPath, validatePath } from "../path-utils.js";
+import { isWildcardPath, matchWildcardPath, splitPath, validatePath } from "../path-utils.js";
 
 describe("validatePath", () => {
 	it("accepts normal paths", () => {
@@ -60,28 +60,5 @@ describe("splitPath", () => {
 
 	it("handles single segment", () => {
 		expect(splitPath("foo")).toEqual(["foo"]);
-	});
-});
-
-describe("isExpression", () => {
-	it("detects { $sum: [...] }", () => {
-		expect(isExpression({ $sum: ["$a", "$b"] })).toBe(true);
-	});
-
-	it("returns false for plain objects", () => {
-		expect(isExpression({ name: "test" })).toBe(false);
-	});
-
-	it("returns false for null", () => {
-		expect(isExpression(null)).toBe(false);
-	});
-
-	it("returns false for arrays", () => {
-		expect(isExpression([1, 2, 3])).toBe(false);
-	});
-
-	it("returns false for primitives", () => {
-		expect(isExpression(42)).toBe(false);
-		expect(isExpression("hello")).toBe(false);
 	});
 });

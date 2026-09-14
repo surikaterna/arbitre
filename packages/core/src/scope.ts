@@ -24,13 +24,6 @@ export interface ScopeManager {
 	readonly getRegisteredNamespaces: () => ReadonlySet<string>;
 }
 
-export function isNamespacePath(path: string, namespaces: ReadonlySet<string>): boolean {
-	for (const namespace of namespaces) {
-		if (path === namespace || path.startsWith(`${namespace}.`)) return true;
-	}
-	return false;
-}
-
 export function createScopeManager(
 	initialState?: Readonly<Record<string, unknown>>,
 	namespaces?: readonly string[],

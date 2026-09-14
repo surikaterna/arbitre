@@ -2,6 +2,7 @@ import type { WriteRecord } from "./contracts.js";
 import { ArbiterError, ArbiterErrorCode } from "./errors.js";
 import type { ScopeProvenance } from "./scope-provenance.js";
 import type { ScopeStorage } from "./scope-storage.js";
+import { cloneState } from "./state-clone.js";
 
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -35,22 +36,26 @@ export class ScopeWrites {
 			throwWriteError("inc", path, ruleName, "existing value could not be inspected");
 		}
 		if (!isFiniteNumber(amount)) throwWriteError("inc", path, ruleName, "amount must be finite");
-		if (inspected.exists && !isFiniteNumber(inspected.value)) {
+		if (inspected.kind === "uninspectable") {
+			throwWriteError("inc", path, ruleName, "existing value is not a data property");
+		}
+		if (inspected.kind === "data" && !isFiniteNumber(inspected.value)) {
 			throwWriteError("inc", path, ruleName, "existing value must be finite");
 		}
-		const base = inspected.exists ? (inspected.value as number) : 0;
+		const base = inspected.kind === "data" ? (inspected.value as number) : 0;
 		const result = base + amount;
 		if (!Number.isFinite(result)) throwWriteError("inc", path, ruleName, "result must be finite");
-		return this.commit(path, result, inspected.value, ruleName);
+		return this.commit(path, result, inspected.kind === "data" ? inspected.value : undefined, ruleName);
 	};
 
 	readonly merge = (path: string, value: unknown, ruleName: string): WriteRecord | undefined => {
 		try {
 			const current = this.storage.readOwn(path);
 			const rhs = inspectPlainDataObject(value);
-			const target = current.exists ? inspectPlainDataObject(current.value) : undefined;
-			const merged = copyDescriptors(target ? target.prototype : rhs.prototype, target?.descriptors, rhs.descriptors);
-			const previous = target ? cloneMergeSnapshot(copyDescriptors(target.prototype, target.descriptors)) : undefined;
+			if (current.kind === "uninspectable") throw new Error("target is not data");
+			const target = current.kind === "data" ? inspectPlainDataObject(current.value) : undefined;
+			const merged = target ? materializeObject(target.prototype, target, rhs) : materializeObject(rhs.prototype, rhs);
+			const previous = target ? cloneState(materializeObject(target.prototype, target)) : undefined;
 			return this.commit(path, merged, previous, ruleName);
 		} catch {
 			throwWriteError("merge", path, ruleName, "value must be a descriptor-safe plain object");
@@ -83,19 +88,19 @@ function validateDescriptor(key: PropertyKey, descriptor: PropertyDescriptor | u
 	if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) throw new Error("unsafe descriptor");
 }
 
-function copyDescriptors(
-	prototype: object | null,
-	...sources: readonly (PropertyDescriptorMap | undefined)[]
-): Record<string, unknown> {
+function materializeObject(prototype: object | null, ...sources: readonly InspectedObject[]): Record<string, unknown> {
 	const result = Object.create(prototype) as Record<string, unknown>;
-	for (const descriptors of sources) if (descriptors) Object.defineProperties(result, descriptors);
+	for (const { descriptors } of sources) {
+		for (const key of Object.keys(descriptors)) {
+			Object.defineProperty(result, key, {
+				configurable: true,
+				enumerable: true,
+				writable: true,
+				value: descriptors[key]!.value,
+			});
+		}
+	}
 	return result;
-}
-
-function cloneMergeSnapshot(value: Record<string, unknown>): Record<string, unknown> {
-	const clone = structuredClone(value) as Record<string, unknown>;
-	Object.setPrototypeOf(clone, Object.getPrototypeOf(value));
-	return clone;
 }
 
 function isFiniteNumber(value: unknown): value is number {
