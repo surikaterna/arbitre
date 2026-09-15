@@ -41,11 +41,7 @@
 			"require": "./dist/debug.cjs"
 		}
 	},
-	"files": [
-		"dist",
-		"src",
-		"docs"
-	],
+	"files": ["dist", "src", "docs"],
 	"sideEffects": false,
 	"scripts": {
 		"build": "tsc --noEmit",
