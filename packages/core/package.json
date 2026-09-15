@@ -1,6 +1,6 @@
 {
 	"name": "@arbitre/core",
-	"version": "0.2.1",
+	"version": "0.3.0",
 	"type": "module",
 	"description": "Rete-inspired production rule engine for declarative state governance",
 	"license": "MIT",
