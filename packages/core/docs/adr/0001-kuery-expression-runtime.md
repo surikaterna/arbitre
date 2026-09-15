@@ -1,6 +1,6 @@
 # ADR 0001: Kuery expression runtime for rule RHS values
 
-- Status: Accepted for draft implementation
+- Status: Accepted
 - Date: 2026-09-11
 - Issue: Arbitre #23
 - Related: Kuery #33/#35/#36 and PR #34; Formbar #90 and PR #91
@@ -51,6 +51,6 @@ Temporal sugar requires an explicitly configured clock; there is no implicit `Da
 
 ## Packaging and consequences
 
-Development is temporarily pinned to polished Kuery PR #34 commit `0c0b623adf871d11b437f67535696405a59e6e49`. Bun does not build the git package, so the path-safe preparation script remains in place. It verifies the full pin against the lock and installed tag, rebuilds from clean output directories, validates every exported ESM/CJS/declaration target, and repairs partial or corrupted output rather than trusting a sentinel file. Do not merge or release until compatible Kuery 2.1.0 is published (or a manual Kuery 2.1.0 release is completed); then replace the git pin with that semver, remove `prepare:kuery` and its script, and repeat every gate against a clean packed consumer.
+Arbitre requires released Kuery 2.1 or later from the package registry. Kuery owns and publishes the generic strict expression runtime and its root and `kuery/expression` entry points; Arbitre consumes only those public entry points and owns the `arbitre-v1` profile and lowering described above. Package validation covers ESM, CJS, declarations, and a clean packed consumer without source aliases or build-time preparation.
 
 Rejected alternatives are a copied evaluator, deep/private Kuery imports, global mutable registration, dual old/new semantics, eager conditionals, and making RHS reads reactive. This is an intentional breaking pre-1.0 refactor.

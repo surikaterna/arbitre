@@ -34,7 +34,7 @@ bun run lint:fix
 
 ## Expression boundary
 
-Kuery owns bounded JSON expression ASTs, profiles, compilation, evaluation, lazy conditionals, and expression dependency extraction. Arbitre lowers RHS shorthand at registration and owns live scope/binding/namespace resolution, ordered writes, scheduling, TMS, effects, and custom stages. Strict `$inc` and descriptor-safe plain-object `$merge` semantics, dependency introspection (including `actionWritesUnknown` for custom stages), and the temporary Kuery release blocker are documented in [ADR 0001](./packages/core/docs/adr/0001-kuery-expression-runtime.md).
+Kuery 2.1 or later owns bounded JSON expression ASTs, profiles, compilation, evaluation, lazy conditionals, and expression dependency extraction. Arbitre lowers RHS shorthand at registration and owns live scope/binding/namespace resolution, ordered writes, scheduling, TMS, effects, and custom stages. Strict `$inc` and descriptor-safe plain-object `$merge` semantics, dependency introspection (including `actionWritesUnknown` for custom stages), and the architectural trust boundary are documented in [ADR 0001](./packages/core/docs/adr/0001-kuery-expression-runtime.md).
 
 ## License
 
