@@ -1,12 +1,16 @@
 import type { ValueExpression } from "kuery/expression";
-import type { ArbitreReference } from "./expression-types.js";
+import type { ArbitreReference, DiagnosticPathMapping } from "./expression-types.js";
 
 export type ExpressionPath = readonly (string | number)[];
 type Node = ValueExpression<ArbitreReference>;
 
+export interface LoweredExpression {
+	readonly node: Node;
+	readonly mappings: readonly DiagnosticPathMapping[];
+}
+
 export interface SugarLowering {
-	readonly lower: (value: unknown, authoredPath: ExpressionPath) => Node;
-	readonly annotate: (node: Node, authoredPath: ExpressionPath) => Node;
+	readonly lower: (value: unknown, authoredPath: ExpressionPath) => LoweredExpression;
 	readonly fail: (reason: string, path: ExpressionPath) => never;
 }
 
@@ -25,7 +29,7 @@ export function lowerExpressionSugar(
 	raw: unknown,
 	path: ExpressionPath,
 	context: SugarLowering,
-): Node | undefined {
+): LoweredExpression | undefined {
 	if (key === "$switch") return lowerSwitch(raw, [...path, key], context);
 	if (key === "$rtime") return lowerRelativeTime(raw, [...path, key], context);
 	if (key === "$after" || key === "$before") return lowerComparison(key, raw, [...path, key], context);
@@ -33,34 +37,47 @@ export function lowerExpressionSugar(
 	return undefined;
 }
 
-function lowerSwitch(raw: unknown, authored: ExpressionPath, context: SugarLowering): Node {
+function lowerSwitch(raw: unknown, authored: ExpressionPath, context: SugarLowering): LoweredExpression {
 	const properties = exactDataObject(raw, ["branches"], ["default"], authored, "$switch descriptor", context);
 	const branches = denseArray(properties.get("branches"), authored, 1, 32, "$switch branches", context);
 	const parsed = branches.map((branch, index) => {
 		const branchPath = [...authored, "branches", index];
 		return exactDataObject(branch, ["case", "then"], [], branchPath, "$switch branch", context);
 	});
-	let result: Node = properties.has("default")
+	let result = properties.has("default")
 		? context.lower(properties.get("default"), [...authored, "default"])
-		: literal(null);
+		: generated(literal(null), authored);
 	for (let index = parsed.length - 1; index >= 0; index -= 1) {
-		const branchPath = [...authored, "branches", index];
-		const branch = parsed[index]!;
-		const condition = context.lower(branch.get("case"), [...branchPath, "case"]);
-		const selected = context.lower(branch.get("then"), [...branchPath, "then"]);
-		result = context.annotate(op("if", [condition, selected, result]), authored);
+		result = prependSwitchBranch(parsed[index]!, index, result, authored, context);
 	}
 	return result;
 }
 
-function lowerRelativeTime(raw: unknown, authored: ExpressionPath, context: SugarLowering): Node {
+function prependSwitchBranch(
+	branch: ReadonlyMap<string, unknown>,
+	index: number,
+	otherwise: LoweredExpression,
+	authored: ExpressionPath,
+	context: SugarLowering,
+): LoweredExpression {
+	const branchPath = [...authored, "branches", index];
+	const condition = context.lower(branch.get("case"), [...branchPath, "case"]);
+	const selected = context.lower(branch.get("then"), [...branchPath, "then"]);
+	return combine(op("if", [condition.node, selected.node, otherwise.node]), authored, [
+		[condition, ["args", 0]],
+		[selected, ["args", 1]],
+		[otherwise, ["args", 2]],
+	]);
+}
+
+function lowerRelativeTime(raw: unknown, authored: ExpressionPath, context: SugarLowering): LoweredExpression {
 	if (typeof raw !== "string") context.fail("$rtime requires a signed duration string", authored);
 	const match = DURATION.exec(raw);
 	if (!match) context.fail("$rtime requires a signed fixed-unit duration", authored);
 	const magnitude = BigInt(match[2]!) * MULTIPLIERS[match[3]!]!;
 	if (magnitude > MAX_SAFE_DELTA) context.fail("$rtime duration exceeds the safe integer range", authored);
 	const delta = Number(match[1] === "-" ? -magnitude : magnitude);
-	return context.annotate(op("add", [context.annotate(clock(), authored), literal(delta)]), authored);
+	return generated(op("add", [clock(), literal(delta)]), authored);
 }
 
 function lowerComparison(
@@ -68,17 +85,17 @@ function lowerComparison(
 	raw: unknown,
 	authored: ExpressionPath,
 	context: SugarLowering,
-): Node {
-	const operandValue = Array.isArray(raw) ? denseArray(raw, authored, 1, 1, `${key} tuple`, context)[0] : raw;
-	const operandPath = Array.isArray(raw) ? [...authored, 0] : authored;
-	const operand = context.lower(operandValue, operandPath);
-	const numericOperand = context.annotate(op("add", [operand, literal(0)]), operandPath);
-	return guarded(
-		key === "$after" ? "gt" : "lt",
-		[context.annotate(clock(), authored), numericOperand],
-		authored,
-		context,
-	);
+): LoweredExpression {
+	const tuple = Array.isArray(raw);
+	const operandValue = tuple ? denseArray(raw, authored, 1, 1, `${key} tuple`, context)[0] : raw;
+	const operand = context.lower(operandValue, tuple ? [...authored, 0] : authored);
+	const numericOperand = op("add", [operand.node, literal(0)]);
+	const comparison = op(key === "$after" ? "gt" : "lt", [clock(), numericOperand]);
+	const root = temporalGuard(comparison, [clock(), numericOperand]);
+	return combine(root, authored, [
+		[operand, ["args", 0, "args", 1, "args", 0, "args", 0]],
+		[operand, ["args", 1, "args", 1, "args", 0]],
+	]);
 }
 
 function lowerWindow(
@@ -86,37 +103,71 @@ function lowerWindow(
 	raw: unknown,
 	authored: ExpressionPath,
 	context: SugarLowering,
-): Node {
+): LoweredExpression {
 	const values = denseArray(raw, authored, 2, 2, `${key} tuple`, context);
 	const start = context.lower(values[0], [...authored, 0]);
 	const duration = context.lower(values[1], [...authored, 1]);
-	const clockValue = context.annotate(clock(), authored);
-	const elapsed = context.annotate(op("sub", [clockValue, start]), authored);
-	const numericDuration = context.annotate(op("add", [duration, literal(0)]), [...authored, 1]);
-	const comparison = context.annotate(op(key === "$elapsed" ? "gt" : "lt", [elapsed, numericDuration]), authored);
-	return guardedExpression(comparison, [clockValue, start, duration], authored, context);
+	const elapsed = op("sub", [clock(), start.node]);
+	const numericDuration = op("add", [duration.node, literal(0)]);
+	const comparison = op(key === "$elapsed" ? "gt" : "lt", [elapsed, numericDuration]);
+	const root = temporalGuard(comparison, [clock(), start.node, duration.node]);
+	return combine(root, authored, temporalMappings(start, duration));
 }
 
-function guarded(
-	operator: "gt" | "lt",
-	operands: readonly Node[],
-	authored: ExpressionPath,
-	context: SugarLowering,
-): Node {
-	const comparison = context.annotate(op(operator, operands), authored);
-	return guardedExpression(comparison, operands, authored, context);
+function temporalMappings(
+	start: LoweredExpression,
+	duration: LoweredExpression,
+): readonly [LoweredExpression, ExpressionPath][] {
+	return [
+		[start, ["args", 0, "args", 1, "args", 0]],
+		[duration, ["args", 0, "args", 2, "args", 0]],
+		[start, ["args", 1, "args", 0, "args", 1]],
+		[duration, ["args", 1, "args", 1, "args", 0]],
+	];
 }
 
-function guardedExpression(
-	comparison: Node,
-	operands: readonly Node[],
+function temporalGuard(comparison: Node, operands: readonly Node[]): Node {
+	return op("if", [
+		op(
+			"and",
+			operands.map((operand) => op("exists", [operand])),
+		),
+		comparison,
+		literal(false),
+	]);
+}
+
+function combine(
+	node: Node,
 	authored: ExpressionPath,
-	context: SugarLowering,
-): Node {
-	const checks = operands.map((operand) => op("exists", [operand]));
-	for (const check of checks) context.annotate(check, authored);
-	const guard = context.annotate(op("and", checks), authored);
-	return context.annotate(op("if", [guard, comparison, literal(false)]), authored);
+	children: readonly (readonly [LoweredExpression, ExpressionPath])[],
+): LoweredExpression {
+	return {
+		node,
+		mappings: Object.freeze([
+			mapping([], authored, "collapse"),
+			...children.flatMap(([child, prefix]) => prefixMappings(child.mappings, prefix)),
+		]),
+	};
+}
+
+function generated(node: Node, authored: ExpressionPath): LoweredExpression {
+	return { node, mappings: Object.freeze([mapping([], authored, "collapse")]) };
+}
+
+function prefixMappings(
+	mappings: readonly DiagnosticPathMapping[],
+	prefix: ExpressionPath,
+): readonly DiagnosticPathMapping[] {
+	return mappings.map((entry) => mapping([...prefix, ...entry.canonical], entry.authored, entry.behavior));
+}
+
+export function mapping(
+	canonical: ExpressionPath,
+	authored: ExpressionPath,
+	behavior: DiagnosticPathMapping["behavior"],
+): DiagnosticPathMapping {
+	return Object.freeze({ canonical: Object.freeze([...canonical]), authored: Object.freeze([...authored]), behavior });
 }
 
 function exactDataObject(

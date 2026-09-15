@@ -30,6 +30,7 @@ export interface CompiledArbitreValue {
 export interface DiagnosticPathMapping {
 	readonly canonical: readonly (string | number)[];
 	readonly authored: readonly (string | number)[];
+	readonly behavior: "collapse" | "pass-through";
 }
 
 export interface RuleDependencies {

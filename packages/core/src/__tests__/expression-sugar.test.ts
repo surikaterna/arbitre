@@ -3,6 +3,8 @@ import type { ProductionRule } from "../contracts.js";
 import { ArbiterError } from "../errors.js";
 import { compileArbitreValue } from "../expression-lower.js";
 import { arbitreV1 } from "../expression-profile.js";
+import { evaluateArbitreValue } from "../expression-runtime.js";
+import { createScopeManager } from "../scope.js";
 import { createSession } from "../session.js";
 
 const clock = (now: number) => ({ now: () => now });
@@ -60,6 +62,10 @@ describe("$switch expression sugar", () => {
 			ok: false,
 			diagnostic: { code: "EXPRESSION_REFERENCE_DENIED" },
 		});
+		expect(capture(() => evaluateArbitreValue(selectedDenied, createScopeManager(), "sugar")).details).toEqual({
+			diagnosticCode: "EXPRESSION_REFERENCE_DENIED",
+			path: ["$switch", "branches", 0, "then"],
+		});
 		const invalid = createSession({
 			expressions: { extensions: [{ name: "app:invalid", arity: 0, execute: () => Number.POSITIVE_INFINITY }] },
 			rules: [rule({ $switch: { branches: [{ case: true, then: canonicalOp("app:invalid") }] } })],
@@ -116,6 +122,49 @@ describe("$switch expression sugar", () => {
 			diagnosticCode: "EXPRESSION_DIVISION_BY_ZERO",
 			path: ["$switch", "branches", 0, "then", "$divide"],
 		});
+	});
+
+	it("passes nested canonical diagnostics through without reading canonical accessors", () => {
+		let reads = 0;
+		const ast = Object.defineProperty({}, "kind", {
+			enumerable: true,
+			get: () => {
+				reads += 1;
+				return "literal";
+			},
+		});
+		const proxied = new Proxy(ast, {
+			get(target, key, receiver) {
+				reads += 1;
+				return Reflect.get(target, key, receiver);
+			},
+		});
+		const error = capture(() =>
+			createSession({
+				rules: [rule({ $switch: { branches: [{ case: true, then: { $expression: proxied } }] } })],
+			}),
+		);
+		expect(reads).toBe(0);
+		expect(error.code).toBe("ARBITER_EXPRESSION_COMPILATION_FAILED");
+		expect(error.details).toEqual({
+			diagnosticCode: "EXPRESSION_INVALID_INPUT",
+			path: ["$switch", "branches", 0, "then", "kind"],
+		});
+	});
+
+	it("stores collision-free immutable mappings with deterministic nearest ancestors", () => {
+		const compiled = compileArbitreValue(
+			{ $switch: { branches: [{ case: { $after: "$start" }, then: { $rtime: "+1s" } }], default: 0 } },
+			options(),
+		);
+		const identities = compiled.diagnosticPaths.map((entry) => JSON.stringify(entry.canonical));
+		expect(new Set(identities).size).toBe(identities.length);
+		expect(Object.isFrozen(compiled.diagnosticPaths)).toBe(true);
+		for (const entry of compiled.diagnosticPaths) {
+			expect(Object.isFrozen(entry)).toBe(true);
+			expect(Object.isFrozen(entry.canonical)).toBe(true);
+			expect(Object.isFrozen(entry.authored)).toBe(true);
+		}
 	});
 
 	it("rejects malformed descriptors without invoking getters", () => {
@@ -226,6 +275,12 @@ describe("temporal predicate sugar", () => {
 			ok: false,
 			diagnostic: { code: "EXPRESSION_REFERENCE_DENIED" },
 		});
+		const scope = createScopeManager();
+		scope.set("$meta.$now", 1_000, "clock");
+		expect(capture(() => evaluateArbitreValue(compiled, scope, "sugar")).details).toEqual({
+			diagnosticCode: "EXPRESSION_REFERENCE_DENIED",
+			path: ["$after"],
+		});
 		const wrong = capture(() => run({ $elapsed: [0, "text"] }, {}, 1_000));
 		expect(wrong.details).toEqual({ diagnosticCode: "EXPRESSION_TYPE_MISMATCH", path: ["$elapsed", 1] });
 	});
@@ -291,6 +346,40 @@ describe("clock integration for expression sugar", () => {
 	});
 });
 
+describe("sugar diagnostic limit paths", () => {
+	const values = {
+		$switch: { $switch: { branches: [{ case: true, then: 1 }] } },
+		$rtime: { $rtime: "+1ms" },
+		$after: { $after: 0 },
+		$before: { $before: 2_000 },
+		$elapsed: { $elapsed: [0, 1] },
+		$within: { $within: [0, 2_000] },
+	} as const;
+
+	it.each(Object.entries(values))("collapses maxNodes scaffolding for %s", (operator, value) => {
+		const error = capture(() => createSession({ expressions: { limits: { maxNodes: 1 } }, rules: [rule(value)] }));
+		expectLimitPath(error, operator);
+	});
+
+	it.each(Object.entries(values))("collapses maxEvaluationSteps scaffolding for %s", (operator, value) => {
+		const session = createSession({
+			clock: clock(1_000),
+			expressions: { limits: { maxEvaluationSteps: 1 } },
+			rules: [rule(value)],
+		});
+		expectLimitPath(
+			capture(() => session.fire()),
+			operator,
+		);
+	});
+
+	it.each(Object.entries(values))("collapses maxDepth scaffolding for %s", (operator, value) => {
+		const nested = operator === "$rtime" ? { $sum: [value] } : value;
+		const error = capture(() => createSession({ expressions: { limits: { maxDepth: 1 } }, rules: [rule(nested)] }));
+		expectLimitPath(error, operator);
+	});
+});
+
 function run(value: unknown, initialState: Record<string, unknown> = {}, now?: number): unknown {
 	const session = createSession({
 		initialState,
@@ -323,4 +412,11 @@ function capture(action: () => unknown): ArbiterError {
 		expect(error).toBeInstanceOf(ArbiterError);
 		return error as ArbiterError;
 	}
+}
+
+function expectLimitPath(error: ArbiterError, operator: string): void {
+	expect(error.details).toMatchObject({ diagnosticCode: expect.stringMatching(/^EXPRESSION_/) });
+	const path = (error.details as { path: readonly (string | number)[] }).path;
+	expect(path).toContain(operator);
+	expect(path).not.toContain("args");
 }
