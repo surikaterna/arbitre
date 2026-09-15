@@ -56,7 +56,7 @@ export function compileArbitreValue(input: unknown, options: LowerOptions): Comp
 		result = compileExpression<ArbitreReference>(lowered.node, {
 			profile: options.profile,
 			reference: createReferenceCodec(options),
-			limits: options.limits,
+			...(options.limits ? { limits: options.limits } : {}),
 		});
 	} catch (error) {
 		if (error instanceof ArbiterError) throw error;

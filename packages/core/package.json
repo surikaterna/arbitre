@@ -46,11 +46,10 @@
 	"scripts": {
 		"build": "tsc --noEmit",
 		"build:dist": "tsup",
-		"prepare:kuery": "node ../../scripts/prepare-kuery-expression.mjs",
-		"test": "bun run prepare:kuery && vitest run --root ../.. packages/core/src/__tests__"
+		"test": "vitest run --root ../.. packages/core/src/__tests__"
 	},
 	"dependencies": {
-		"kuery": "github:surikaterna/kuery#0c0b623adf871d11b437f67535696405a59e6e49"
+		"kuery": "^2.1.0"
 	},
 	"publishConfig": {
 		"access": "public"

@@ -3,12 +3,11 @@
 	"private": true,
 	"workspaces": ["packages/*"],
 	"scripts": {
-		"build": "bun run --filter @arbitre/core prepare:kuery && bun run --filter '*' build:dist",
-		"typecheck": "bun run --filter @arbitre/core prepare:kuery && bun run --filter '*' build",
-		"test": "bun run --filter @arbitre/core prepare:kuery && vitest run",
+		"build": "bun run --filter '*' build:dist",
+		"typecheck": "bun run --filter '*' build",
+		"test": "vitest run",
 		"test:coverage": "vitest run --coverage",
-		"test:performance": "bun run --filter @arbitre/core prepare:kuery && vitest run --config vitest.performance.config.ts",
-		"test:prepare-kuery": "node test/prepare-kuery-smoke.mjs",
+		"test:performance": "vitest run --config vitest.performance.config.ts",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"test:public-types": "tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext test/expression-public-types.mts"
