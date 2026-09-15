@@ -32,7 +32,7 @@
   - Namespaced state management ($ui, $state, $meta, $contributions)
   - MongoDB update operators ($set, $unset, $inc, $push, $pull, $merge)
   - Expression operators ($sum, $multiply, $cond, $coalesce, etc.)
-  - Temporal operators ($elapsed, $within, $after, $before) with clock abstraction
+  - Clock, timer queue, rule expiry, and windowed temporal orchestration
   - Timer queue for scheduled rule activation/deactivation
   - Rule expiry with auto-deactivation
   - Accumulate nodes (sum, count, min, max, avg, collect)

@@ -1,3 +1,5 @@
+import type { RuleDependencies } from "./expression-types.js";
+
 export interface SessionMetrics {
 	readonly totalRulesFired: number;
 	readonly totalCycles: number;
@@ -18,4 +20,6 @@ export interface SessionIntrospection {
 	readonly getTokenCounts: () => Readonly<Record<string, number>>;
 	/** Current fire cycle metrics */
 	readonly getMetrics: () => SessionMetrics;
+	/** Static reads/writes classified by role; only condition reads drive scheduling. */
+	readonly getRuleDependencies: (ruleName: string) => RuleDependencies | undefined;
 }

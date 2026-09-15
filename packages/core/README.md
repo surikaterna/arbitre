@@ -77,7 +77,7 @@ session.assertFact("order", { customerId: "c1", total: 2500 });
 session.fire();
 ```
 
-### Temporal Operators
+### Clock-based rules
 
 ```typescript
 import { createSession, createVirtualClock } from "@arbitre/core";
@@ -87,8 +87,8 @@ const session = createSession({
   clock,
   rules: [
     {
-      name: "idle-timeout",
-      when: { $since: [{ $path: "user.lastActive" }, 30000] },
+      name: "deadline",
+      when: { "$meta.$now": { $gt: 30000 } },
       then: [{ $set: { "user.status": "idle" } }],
     },
   ],
@@ -164,7 +164,7 @@ Factory function that compiles rules and returns a session instance.
 |-------|------|-------------|
 | `rules` | `ProductionRule[]` | Rules to compile into the network |
 | `initialState` | `Record<string, unknown>` | Starting state |
-| `operators` | `OperatorRegistryConfig` | Custom expression operators |
+| `expressions` | `ArbitreExpressionConfig` | Pure namespaced Kuery profile extensions and stricter bounds |
 | `limits` | `SessionLimits` | Cycle/firing limits |
 | `tms` | `TmsConfig` | Truth maintenance configuration |
 | `errorHandling` | `"strict" \| "lenient"` | Error behavior |
@@ -226,9 +226,40 @@ interface ProductionRule<TState> {
 | `$pull` | Remove from arrays |
 | `$merge` | Shallow merge objects |
 
-### Expression Operators
+### RHS value expressions
 
-Conditions use `kuery` expression syntax:
+`when` continues to use Kuery query syntax. RHS values use the immutable `arbitre-v1` strict expression profile. Mongo-inspired shorthand is lowered once at registration:
+
+```typescript
+import { expression, literal } from "@arbitre/core";
+
+const rule = {
+  name: "total",
+  when: { enabled: true },
+  then: [{ $set: {
+    total: { $sum: ["$price", "$tax"] },
+    decision: { $switch: { branches: [
+      { case: "$approved", then: "yes" }
+    ], default: "no" } },
+	deadline: { $rtime: "+1d" },
+	isRecent: { $within: ["$createdAt", 30000] },
+    data: literal({ $sum: [1, 2] }),
+    canonical: expression({ kind: "op", op: "add", args: [
+      { kind: "literal", value: 1 }, { kind: "literal", value: 2 }
+    ] })
+  }}]
+};
+```
+
+Each RHS entry resolves against live state immediately before its write. Declared token bindings take precedence over root paths. Use `session.introspect.getRuleDependencies(name)` to inspect condition reads, RHS reads, action writes, and token-binding reads; only condition reads schedule rules. `actionWrites` contains statically known built-in paths. Rules containing a custom stage also expose `actionWritesUnknown: true`, without treating custom entry keys as writes; runtime state changes remain exact.
+
+Strict shorthand includes arithmetic (`$sum`, `$multiply`, `$subtract`, `$divide`), `$min`/`$max`/`$avg`, rounding, string-only `$concat`, comparisons, boolean logic, membership, `$exists`, `$ifNull`, lazy `$cond`, `$switch`, `$rtime`, `$after`, `$before`, `$elapsed`, and `$within`. `$switch` evaluates strict-boolean cases in order and only evaluates its selected result. `$rtime` accepts signed fixed-unit durations (`ms`, `s`, `m`, `h`, or a fixed 86,400,000 ms `d`) and produces epoch milliseconds from an explicitly configured clock. There is no `$since` alias. Variadic `$sum`/`$multiply` lower to standard `add`/`mul`. `$foo.bar` selects a declared `foo` binding, registered `$foo` namespace, or root path in that order; `$$foo.bar` forces a declared namespace. Dot characters delimit safe segments and are not literal key characters. Extensions are canonical-only and must be invoked through `expression(...)`; an extension name does not create shorthand. See [ADR 0001](./docs/adr/0001-kuery-expression-runtime.md) for the complete migration table and architectural trust boundary.
+
+`$inc` uses zero only for an absent terminal own property and otherwise requires an inspectable finite existing number, finite amount, and finite result. `$merge` shallow-copies exact plain data objects only: `Object.prototype` and null prototypes are accepted, while exotic prototypes, accessors, symbols, non-enumerables, and unsafe keys are rejected before copying. Missing merges preserve the RHS prototype; existing merges preserve the target prototype, and all materialized properties remain writable for later stages. Commit-path failures are reported with only the operator, rule, path, and a stable reason.
+
+The supported state boundary is trusted plain-data graphs, such as decoded JSON, including arrays and null-prototype containers. Validation failures on supported data occur before writes. Hostile or stateful proxies, accessors, exotic objects, and callbacks are not sandboxed: their traps or code may cause external mutation that Arbitre cannot roll back. `getState()` and the scope passed to custom stages are convenience views, not deeply immutable security boundaries. Custom stages are trusted, raw, and scope-aware; they must use their supplied write callback for tracked `StateChange` and provenance records. Checkpoint and provenance snapshots preserve cycles, shared references, and null prototypes within supported containers. Kuery owns bounded expression compilation/evaluation and lazy expression semantics; Arbitre owns lowering, live resolution, write ordering, scheduling, TMS, effects, and custom stages.
+
+### Condition operators
 
 | Operator | Description |
 |----------|-------------|
@@ -239,16 +270,11 @@ Conditions use `kuery` expression syntax:
 | `$and` / `$or` / `$not` | Logical combinators |
 | `$in` / `$nin` | Set membership |
 | `$exists` | Path existence check |
-| `$path` | Resolve a dot-path value |
 | `$regex` | Regular expression match |
 
-### Temporal Operators
+### Temporal behavior
 
-| Operator | Description |
-|----------|-------------|
-| `$since` | True if time elapsed since a timestamp exceeds threshold |
-| `$within` | True if event occurred within a time window |
-| `$after` | True if current time is after a given timestamp |
+Clock expression sugar is available only when `clock` is explicitly configured; Arbitre never supplies an implicit wall clock. `$after(t)` means `now > t`, `$before(t)` means `now < t`, `$elapsed([t, d])` means `now - t > d`, and `$within([t, d])` means `now - t < d`; equality is false and negative values use the same direct arithmetic. A missing clock or operand returns `false`, a denied reference remains an error, and a present wrong type is a Kuery type mismatch. Guarded present operands can resolve twice against state that is stable during one expression evaluation. Temporal RHS reads are static dependency metadata and do not independently schedule/refire a rule; use `tick` with a time condition when reactivity is required. Schedules, rule expiry, and windowed accumulation remain separate orchestration features.
 
 ### Error Codes
 
@@ -264,7 +290,8 @@ Conditions use `kuery` expression syntax:
 | `ARBITER_INVALID_NAMESPACE` | Invalid namespace in path |
 | `ARBITER_SESSION_DISPOSED` | Operation on disposed session |
 | `ARBITER_PROTOTYPE_POLLUTION` | Prototype pollution attempt blocked |
-| `ARBITER_EXPRESSION_EVAL_FAILED` | Expression evaluation error |
+| `ARBITER_EXPRESSION_COMPILATION_FAILED` | RHS expression failed bounded registration-time compilation |
+| `ARBITER_EXPRESSION_EVALUATION_FAILED` | RHS expression evaluation error |
 | `ARBITER_RULE_NOT_FOUND` | Referenced rule does not exist |
 | `ARBITER_INVALID_CLOCK_OPERATION` | Invalid clock operation |
 
@@ -389,7 +416,7 @@ console.log(i.getMetrics());          // { totalRulesFired: 2, ... }
 
 | Dependency | Role |
 |------------|------|
-| `kuery` | Expression language for rule conditions (`when` clauses) |
+| `kuery` 2.1+ | Bounded expression runtime for rule conditions and RHS values |
 
 ## License
 

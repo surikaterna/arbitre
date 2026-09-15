@@ -1,4 +1,5 @@
 import type { CompiledStage } from "./contracts.js";
+import type { ArbitreReference, CompiledArbitreValue } from "./expression-types.js";
 import { isRecord } from "./type-guards.js";
 
 interface PathNode {
@@ -18,6 +19,8 @@ interface LiteralNode {
 }
 
 type ExprLike = PathNode | OpNode | LiteralNode;
+
+const BUILT_IN_WRITE_OPERATORS = new Set(["$set", "$inc", "$push", "$merge", "$unset", "$pull"]);
 
 function isExprLike(node: unknown): node is ExprLike {
 	if (!isRecord(node)) return false;
@@ -57,10 +60,38 @@ export function extractConditionDeps(condition: unknown): readonly string[] {
 export function extractActionDeps(stages: readonly CompiledStage[]): readonly string[] {
 	const paths = new Set<string>();
 	for (const stage of stages) {
-		if (stage.operator === "$focus") continue;
+		if (!BUILT_IN_WRITE_OPERATORS.has(stage.operator)) continue;
 		for (const path of stage.entries.keys()) {
 			paths.add(path);
 		}
 	}
 	return [...paths];
+}
+
+export function hasUnknownActionWrites(stages: readonly CompiledStage[]): boolean {
+	return stages.some((stage) => stage.operator !== "$focus" && !BUILT_IN_WRITE_OPERATORS.has(stage.operator));
+}
+
+export function extractRhsDeps(stages: readonly CompiledStage[]): readonly ArbitreReference[] {
+	const dependencies: ArbitreReference[] = [];
+	const seen = new Set<string>();
+	for (const stage of stages) {
+		if (!["$set", "$inc", "$push", "$merge"].includes(stage.operator)) continue;
+		for (const value of stage.entries.values()) collectRhsValue(value, dependencies, seen);
+	}
+	return Object.freeze(dependencies);
+}
+
+function collectRhsValue(value: unknown, output: ArbitreReference[], seen: Set<string>): void {
+	if (!isCompiledValue(value)) return;
+	for (const reference of value.expression.dependencies) {
+		const identity = JSON.stringify(reference);
+		if (seen.has(identity)) continue;
+		seen.add(identity);
+		output.push(reference);
+	}
+}
+
+function isCompiledValue(value: unknown): value is CompiledArbitreValue {
+	return isRecord(value) && isRecord(value.expression) && Array.isArray(value.expression.dependencies);
 }

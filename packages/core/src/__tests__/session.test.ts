@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ArbiterError } from "../errors.js";
+import { ArbiterError, ArbiterErrorCode } from "../errors.js";
+import { createSessionSubscriptions } from "../session-subscriptions.js";
 import { createSession } from "../session.js";
 
 // ---------------------------------------------------------------------------
@@ -292,6 +293,32 @@ describe("disposed session", () => {
 		expect(() => session.fire()).toThrow(ArbiterError);
 		expect(() => session.assert("foo", 1)).toThrow(ArbiterError);
 		expect(() => session.getState()).toThrow(ArbiterError);
+	});
+
+	it("rejects subscriptions after dispose without retaining callbacks", () => {
+		const session = createSession();
+		session.dispose();
+		try {
+			session.subscribe("x", () => {});
+			throw new Error("Expected subscribe to fail");
+		} catch (error) {
+			expect(error).toBeInstanceOf(ArbiterError);
+			expect((error as ArbiterError).code).toBe(ArbiterErrorCode.SESSION_DISPOSED);
+			expect((error as ArbiterError).message).toBe("Session has been disposed");
+		}
+		expect(() => session.assert("x", 1)).toThrow("Session has been disposed");
+	});
+
+	it("does not retain a subscription when the disposal guard rejects it", () => {
+		let disposed = true;
+		let calls = 0;
+		const subscriptions = createSessionSubscriptions(() => {
+			if (disposed) throw new ArbiterError(ArbiterErrorCode.SESSION_DISPOSED, "Session has been disposed");
+		});
+		expect(() => subscriptions.subscribe("x", () => calls++)).toThrow("Session has been disposed");
+		disposed = false;
+		subscriptions.notify([{ path: "x", previousValue: undefined, newValue: 1, source: "test" }]);
+		expect(calls).toBe(0);
 	});
 });
 

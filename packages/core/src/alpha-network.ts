@@ -1,12 +1,12 @@
 import type { CompiledRule } from "./contracts.js";
-import { extractActionDeps, extractConditionDeps } from "./dependency-extract.js";
+import type { RuleDependencies } from "./expression-types.js";
 import { isWildcardPath, matchWildcardPath } from "./path-utils.js";
 
 export interface AlphaNetwork {
 	readonly getAffectedRules: (changedPath: string) => readonly CompiledRule[];
 	readonly addRule: (rule: CompiledRule) => void;
 	readonly removeRule: (ruleName: string) => void;
-	readonly getRuleDeps: (ruleName: string) => readonly string[];
+	readonly getRuleDependencies: (ruleName: string) => RuleDependencies | undefined;
 }
 
 interface WildcardEntry {
@@ -14,75 +14,83 @@ interface WildcardEntry {
 	readonly rule: CompiledRule;
 }
 
-export function createAlphaNetwork(): AlphaNetwork {
-	const exactIndex = new Map<string, Set<CompiledRule>>();
-	const wildcardEntries: WildcardEntry[] = [];
-	const ruleDeps = new Map<string, readonly string[]>();
-	const rulesByName = new Map<string, CompiledRule>();
+class AlphaNetworkIndex implements AlphaNetwork {
+	private readonly exactIndex = new Map<string, Set<CompiledRule>>();
+	private readonly wildcardEntries: WildcardEntry[] = [];
+	private readonly ruleDeps = new Map<string, RuleDependencies>();
+	private readonly rulesByName = new Map<string, CompiledRule>();
 
-	function addRule(rule: CompiledRule): void {
-		const condDeps = extractConditionDeps(rule.condition);
-		const actionDeps = extractActionDeps(rule.actions);
-		const allDeps = [...new Set([...condDeps, ...actionDeps])];
+	readonly addRule = (rule: CompiledRule): void => {
+		const dependencies = freezeDependencies(rule.dependencies);
+		this.ruleDeps.set(rule.name, dependencies);
+		this.rulesByName.set(rule.name, rule);
 
-		ruleDeps.set(rule.name, allDeps);
-		rulesByName.set(rule.name, rule);
-
-		for (const dep of condDeps) {
+		for (const dep of dependencies.conditionReads) {
 			if (isWildcardPath(dep)) {
-				wildcardEntries.push({ pattern: dep, rule });
+				this.wildcardEntries.push({ pattern: dep, rule });
 			} else {
-				let set = exactIndex.get(dep);
+				let set = this.exactIndex.get(dep);
 				if (!set) {
 					set = new Set();
-					exactIndex.set(dep, set);
+					this.exactIndex.set(dep, set);
 				}
 				set.add(rule);
 			}
 		}
-	}
+	};
 
-	function removeRule(ruleName: string): void {
-		const rule = rulesByName.get(ruleName);
+	readonly removeRule = (ruleName: string): void => {
+		const rule = this.rulesByName.get(ruleName);
 		if (!rule) return;
 
-		rulesByName.delete(ruleName);
-		ruleDeps.delete(ruleName);
+		this.rulesByName.delete(ruleName);
+		this.ruleDeps.delete(ruleName);
 
-		for (const set of exactIndex.values()) {
+		for (const set of this.exactIndex.values()) {
 			set.delete(rule);
 		}
 
-		// Remove wildcard entries for this rule (iterate backwards for safe splice)
-		for (let i = wildcardEntries.length - 1; i >= 0; i--) {
-			if (wildcardEntries[i].pattern !== undefined && wildcardEntries[i].rule === rule) {
-				wildcardEntries.splice(i, 1);
+		for (let i = this.wildcardEntries.length - 1; i >= 0; i--) {
+			if (this.wildcardEntries[i].rule === rule) {
+				this.wildcardEntries.splice(i, 1);
 			}
 		}
-	}
+	};
 
-	function getAffectedRules(changedPath: string): readonly CompiledRule[] {
+	readonly getAffectedRules = (changedPath: string): readonly CompiledRule[] => {
 		const result = new Set<CompiledRule>();
 
-		const exactSet = exactIndex.get(changedPath);
+		const exactSet = this.exactIndex.get(changedPath);
 		if (exactSet) {
 			for (const rule of exactSet) {
 				result.add(rule);
 			}
 		}
 
-		for (const entry of wildcardEntries) {
+		for (const entry of this.wildcardEntries) {
 			if (matchWildcardPath(entry.pattern, changedPath)) {
 				result.add(entry.rule);
 			}
 		}
 
 		return [...result];
-	}
+	};
 
-	function getRuleDeps(ruleName: string): readonly string[] {
-		return ruleDeps.get(ruleName) ?? [];
-	}
+	readonly getRuleDependencies = (ruleName: string): RuleDependencies | undefined => {
+		return this.ruleDeps.get(ruleName);
+	};
+}
 
-	return { getAffectedRules, addRule, removeRule, getRuleDeps };
+export function createAlphaNetwork(): AlphaNetwork {
+	return new AlphaNetworkIndex();
+}
+
+function freezeDependencies(input: RuleDependencies): RuleDependencies {
+	return Object.freeze({
+		conditionReads: Object.freeze([...input.conditionReads]),
+		rhsReads: Object.freeze(input.rhsReads.map((reference) => Object.freeze({ ...reference }))),
+		actionWrites: Object.freeze([...input.actionWrites]),
+		...(input.actionWritesUnknown ? { actionWritesUnknown: true as const } : {}),
+		bindingReads: Object.freeze(input.bindingReads.map((reference) => Object.freeze({ ...reference }))),
+	});
 }

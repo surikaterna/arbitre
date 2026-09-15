@@ -76,4 +76,33 @@ describe("checkpoint / rollback", () => {
 		session.dispose();
 		expect(() => session.checkpoint()).toThrow();
 	});
+
+	it("preserves recursive null prototypes across rollback and subsequent writes", () => {
+		const shared = Object.assign(Object.create(null) as Record<string, unknown>, { nested: true });
+		const config = Object.assign(Object.create(null) as Record<string, unknown>, {
+			value: 1,
+			first: shared,
+			second: shared,
+		});
+		config.self = config;
+		const session = createSession({
+			initialState: { config, trigger: false },
+			rules: [{ name: "merge-after", when: { trigger: true }, then: [{ $merge: { config: { merged: true } } }] }],
+		});
+		const checkpoint = session.checkpoint();
+		session.assert("config.value", 2);
+		session.rollback(checkpoint);
+		const restored = session.getState().config as Record<string, unknown>;
+		expect(Object.getPrototypeOf(restored)).toBeNull();
+		expect(restored.self).toBe(restored);
+		expect(restored.first).toBe(restored.second);
+		expect(Object.getPrototypeOf(restored.first as object)).toBeNull();
+
+		session.assert("config.extra", 3);
+		session.assert("trigger", true);
+		session.fire();
+		const merged = session.getPath("config") as Record<string, unknown>;
+		expect(Object.getPrototypeOf(merged)).toBeNull();
+		expect(merged).toMatchObject({ value: 1, extra: 3, merged: true });
+	});
 });

@@ -20,6 +20,7 @@ function makeRule(overrides: Partial<ProductionRule> & { name: string }): Compil
 		enabled: true,
 		hasTms: false,
 		source,
+		dependencies: { conditionReads: [], rhsReads: [], actionWrites: [], bindingReads: [] },
 	};
 }
 

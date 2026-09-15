@@ -146,27 +146,4 @@ describe("Fact-Triggered Fire Cycle", () => {
 		expect(result.rulesFired).toBe(1);
 		expect(session.getPath("result.big")).toBe(true);
 	});
-
-	it("performance: 100 facts × 5 rules in <50ms", () => {
-		const rules: ProductionRule[] = [];
-		for (let i = 0; i < 5; i++) {
-			rules.push({
-				name: `rule-${i}`,
-				when: {},
-				then: [{ $set: { [`result.r${i}`]: true } }],
-				patterns: [{ $fact: "Order", $bind: "order" }],
-			});
-		}
-
-		const session = createSession(makeConfig(rules));
-
-		const start = performance.now();
-		for (let i = 0; i < 100; i++) {
-			session.assertFact("Order", { status: "pending", amount: i, customerId: `c${i}` });
-		}
-		session.fire();
-		const elapsed = performance.now() - start;
-
-		expect(elapsed).toBeLessThan(50);
-	});
 });

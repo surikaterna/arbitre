@@ -2,100 +2,18 @@ import type { ExprNode } from "kuery";
 import { evaluate } from "kuery";
 import type { Agenda } from "./agenda.js";
 import type { Token } from "./beta-node.js";
-import type { CompiledStage, OperatorFunction, StateChange, ThenOperatorRegistry } from "./contracts.js";
+import type { CompiledStage, StateChange, ThenOperatorRegistry } from "./contracts.js";
 import { ArbiterError, ArbiterErrorCode } from "./errors.js";
-import { isExpression } from "./path-utils.js";
+import { evaluateArbitreValue } from "./expression-runtime.js";
+import type { CompiledArbitreValue } from "./expression-types.js";
 import type { ScopeManager } from "./scope.js";
-import { isNamespacePath } from "./scope.js";
-import { isRecord } from "./type-guards.js";
-
-// ---------------------------------------------------------------------------
-// Expression value resolution
-// ---------------------------------------------------------------------------
-
-function isNamespacedRef(ref: string, namespaces: ReadonlySet<string>): boolean {
-	return isNamespacePath(ref, namespaces);
-}
-
-function resolvePath(obj: Record<string, unknown>, path: string): unknown {
-	const parts = path.split(".");
-	let current: unknown = obj;
-	for (const part of parts) {
-		if (current == null || typeof current !== "object") return undefined;
-		current = (current as Record<string, unknown>)[part];
-	}
-	return current;
-}
-
-export function resolveValue(
-	value: unknown,
-	scope: ScopeManager,
-	operators?: Readonly<Record<string, OperatorFunction>>,
-	token?: Token,
-): unknown {
-	if (typeof value === "string" && value.startsWith("$")) {
-		const ref = value.slice(1);
-
-		// Check token bindings first (before scope)
-		if (token) {
-			const dotIndex = ref.indexOf(".");
-			if (dotIndex > 0) {
-				const bindingName = ref.slice(0, dotIndex);
-				const fieldPath = ref.slice(dotIndex + 1);
-				const boundFact = token.factBindings[bindingName];
-				if (boundFact) {
-					return resolvePath(boundFact.data, fieldPath);
-				}
-			}
-		}
-
-		// Fall through to scope resolution (existing behavior)
-		const path = isNamespacedRef(`$${ref}`, scope.getRegisteredNamespaces()) ? `$${ref}` : ref;
-		return scope.get(path);
-	}
-	if (isExpression(value) && isRecord(value)) {
-		return evaluateExpression(value, scope, operators, token);
-	}
-	return value;
-}
-
-function evaluateExpression(
-	expr: Record<string, unknown>,
-	scope: ScopeManager,
-	operators?: Readonly<Record<string, OperatorFunction>>,
-	token?: Token,
-): unknown {
-	const keys = Object.keys(expr);
-	const opKey = keys.find((k) => k.startsWith("$"));
-	if (!opKey) return expr;
-
-	const rawArgs = expr[opKey];
-	const args = Array.isArray(rawArgs)
-		? rawArgs.map((a) => resolveValue(a, scope, operators, token))
-		: [resolveValue(rawArgs, scope, operators, token)];
-
-	if (operators && opKey in operators) {
-		return operators[opKey](args, scope.getReadView());
-	}
-
-	return null;
-}
-
-// ---------------------------------------------------------------------------
-// Stage execution context (subset of FireContext needed here)
-// ---------------------------------------------------------------------------
 
 export interface StageExecContext {
 	readonly scope: ScopeManager;
 	readonly agenda: Agenda;
 	readonly thenOperators?: ThenOperatorRegistry | undefined;
-	readonly operators?: Readonly<Record<string, OperatorFunction>> | undefined;
 	readonly token?: Token | undefined;
 }
-
-// ---------------------------------------------------------------------------
-// Execute a list of compiled stages
-// ---------------------------------------------------------------------------
 
 export function executeStages(
 	stages: readonly CompiledStage[],
@@ -103,127 +21,108 @@ export function executeStages(
 	ctx: StageExecContext,
 ): StateChange[] {
 	const changes: StateChange[] = [];
-	for (const stage of stages) {
-		const stageChanges = executeSingleStage(stage, ruleName, ctx);
-		changes.push(...stageChanges);
-	}
+	for (const stage of stages) changes.push(...executeSingleStage(stage, ruleName, ctx));
 	return changes;
 }
 
 function executeSingleStage(stage: CompiledStage, ruleName: string, ctx: StageExecContext): StateChange[] {
 	switch (stage.operator) {
 		case "$set":
-			return executeSet(stage.entries, ruleName, ctx);
-		case "$unset":
-			return executeUnset(stage.entries, ruleName, ctx);
+			return executeValues(stage, ruleName, ctx, (path, value) => ctx.scope.set(path, value, ruleName));
 		case "$inc":
-			return executeInc(stage.entries, ruleName, ctx);
+			return executeValues(stage, ruleName, ctx, (path, value) => ctx.scope.inc(path, value, ruleName));
 		case "$push":
-			return executePush(stage.entries, ruleName, ctx);
-		case "$pull":
-			return executePull(stage.entries, ruleName, ctx);
+			return executeValues(stage, ruleName, ctx, (path, value) => ctx.scope.push(path, value, ruleName));
 		case "$merge":
-			return executeMerge(stage.entries, ruleName, ctx);
+			return executeValues(stage, ruleName, ctx, (path, value) => ctx.scope.merge(path, value, ruleName));
+		case "$unset":
+			return executeUnset(stage, ruleName, ctx);
+		case "$pull":
+			return executePull(stage, ruleName, ctx);
 		case "$focus":
-			return executeFocus(stage.entries, ctx);
+			ctx.agenda.setFocus(String(stage.entries.get("group") ?? ""));
+			return [];
 		default:
 			return executeCustomOperator(stage, ruleName, ctx);
 	}
 }
 
-function executeSet(entries: ReadonlyMap<string, unknown>, ruleName: string, ctx: StageExecContext): StateChange[] {
+function executeValues(
+	stage: CompiledStage,
+	ruleName: string,
+	ctx: StageExecContext,
+	write: (path: string, value: unknown) => void,
+): StateChange[] {
 	const changes: StateChange[] = [];
-	for (const [path, compiledValue] of entries) {
-		const value = resolveValue(compiledValue, ctx.scope, ctx.operators, ctx.token);
-		const prev = ctx.scope.get(path);
-		ctx.scope.set(path, value, ruleName);
-		changes.push({ path, previousValue: prev, newValue: value, ruleName });
+	for (const [path, compiled] of stage.entries) {
+		const value = evaluateStageValue(stage, path, compiled as CompiledArbitreValue, ruleName, ctx);
+		const previousValue = ctx.scope.get(path);
+		write(path, value);
+		changes.push({ path, previousValue, newValue: ctx.scope.get(path), ruleName });
 	}
 	return changes;
 }
 
-function executeUnset(entries: ReadonlyMap<string, unknown>, ruleName: string, ctx: StageExecContext): StateChange[] {
+function evaluateStageValue(
+	stage: CompiledStage,
+	path: string,
+	compiled: CompiledArbitreValue,
+	ruleName: string,
+	ctx: StageExecContext,
+) {
+	try {
+		return evaluateArbitreValue(compiled, ctx.scope, ruleName, ctx.token);
+	} catch (error) {
+		if (!["$inc", "$merge"].includes(stage.operator) || !isEvaluationError(error)) throw error;
+		const diagnostic = error.details as { diagnosticCode?: string } | undefined;
+		throw new ArbiterError(error.code, `${stage.operator} failed for rule "${ruleName}" at ${path}`, {
+			ruleName,
+			details: {
+				operator: stage.operator,
+				ruleName,
+				path,
+				reason: diagnostic?.diagnosticCode ?? "expression evaluation failed",
+			},
+		});
+	}
+}
+
+function isEvaluationError(error: unknown): error is ArbiterError {
+	return error instanceof ArbiterError && error.code === ArbiterErrorCode.EXPRESSION_EVALUATION_FAILED;
+}
+
+function executeUnset(stage: CompiledStage, ruleName: string, ctx: StageExecContext): StateChange[] {
 	const changes: StateChange[] = [];
-	for (const [path] of entries) {
-		const prev = ctx.scope.get(path);
+	for (const path of stage.entries.keys()) {
+		const previousValue = ctx.scope.get(path);
 		ctx.scope.unset(path, ruleName);
-		changes.push({ path, previousValue: prev, newValue: undefined, ruleName });
+		changes.push({ path, previousValue, newValue: undefined, ruleName });
 	}
 	return changes;
 }
 
-function executeInc(entries: ReadonlyMap<string, unknown>, ruleName: string, ctx: StageExecContext): StateChange[] {
+function executePull(stage: CompiledStage, ruleName: string, ctx: StageExecContext): StateChange[] {
 	const changes: StateChange[] = [];
-	for (const [path, compiledValue] of entries) {
-		const value = resolveValue(compiledValue, ctx.scope, ctx.operators, ctx.token);
-		const prev = ctx.scope.get(path);
-		ctx.scope.inc(path, value, ruleName);
-		const newVal = ctx.scope.get(path);
-		changes.push({ path, previousValue: prev, newValue: newVal, ruleName });
+	for (const [path, predicate] of stage.entries) {
+		const previousValue = ctx.scope.get(path);
+		if (!Array.isArray(previousValue)) continue;
+		const value = previousValue.filter((item) => !evaluate(predicate as ExprNode, item as Record<string, unknown>));
+		ctx.scope.set(path, value, ruleName);
+		changes.push({ path, previousValue, newValue: value, ruleName });
 	}
 	return changes;
-}
-
-function executePush(entries: ReadonlyMap<string, unknown>, ruleName: string, ctx: StageExecContext): StateChange[] {
-	const changes: StateChange[] = [];
-	for (const [path, compiledValue] of entries) {
-		const value = resolveValue(compiledValue, ctx.scope, ctx.operators, ctx.token);
-		const prev = ctx.scope.get(path);
-		ctx.scope.push(path, value, ruleName);
-		const newVal = ctx.scope.get(path);
-		changes.push({ path, previousValue: prev, newValue: newVal, ruleName });
-	}
-	return changes;
-}
-
-function executePull(entries: ReadonlyMap<string, unknown>, ruleName: string, ctx: StageExecContext): StateChange[] {
-	const changes: StateChange[] = [];
-	for (const [path, compiledMatch] of entries) {
-		const prev = ctx.scope.get(path);
-		if (!Array.isArray(prev)) continue;
-		const filtered = prev.filter((item) => !evaluate(compiledMatch as ExprNode, item as Record<string, unknown>));
-		ctx.scope.set(path, filtered, ruleName);
-		changes.push({ path, previousValue: prev, newValue: filtered, ruleName });
-	}
-	return changes;
-}
-
-function executeMerge(entries: ReadonlyMap<string, unknown>, ruleName: string, ctx: StageExecContext): StateChange[] {
-	const changes: StateChange[] = [];
-	for (const [path, compiledValue] of entries) {
-		const value = resolveValue(compiledValue, ctx.scope, ctx.operators, ctx.token);
-		const prev = ctx.scope.get(path);
-		ctx.scope.merge(path, value, ruleName);
-		const newVal = ctx.scope.get(path);
-		changes.push({ path, previousValue: prev, newValue: newVal, ruleName });
-	}
-	return changes;
-}
-
-function executeFocus(entries: ReadonlyMap<string, unknown>, ctx: StageExecContext): StateChange[] {
-	const group = String(entries.get("group") ?? "");
-	ctx.agenda.setFocus(group);
-	return [];
 }
 
 function executeCustomOperator(stage: CompiledStage, ruleName: string, ctx: StageExecContext): StateChange[] {
-	const registry = ctx.thenOperators;
-	if (!registry) {
-		throw new ArbiterError(
-			ArbiterErrorCode.RULE_COMPILATION_FAILED,
-			`Unknown then operator "${stage.operator}" and no operator registry configured`,
-		);
-	}
-	const handler = registry.get(stage.operator);
+	const handler = ctx.thenOperators?.get(stage.operator);
 	if (!handler) {
 		throw new ArbiterError(ArbiterErrorCode.RULE_COMPILATION_FAILED, `Unknown then operator "${stage.operator}"`);
 	}
 	const changes: StateChange[] = [];
-	const scope = ctx.scope.getReadView();
-	handler(stage.entries, scope, (path, value) => {
-		const prev = ctx.scope.get(path);
+	handler(stage.entries, ctx.scope.getReadView(), (path, value) => {
+		const previousValue = ctx.scope.get(path);
 		ctx.scope.set(path, value, ruleName);
-		changes.push({ path, previousValue: prev, newValue: value, ruleName });
+		changes.push({ path, previousValue, newValue: value, ruleName });
 	});
 	return changes;
 }

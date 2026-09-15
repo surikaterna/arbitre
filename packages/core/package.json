@@ -41,23 +41,15 @@
 			"require": "./dist/debug.cjs"
 		}
 	},
-	"files": ["dist", "src"],
+	"files": ["dist", "src", "docs"],
 	"sideEffects": false,
 	"scripts": {
 		"build": "tsc --noEmit",
 		"build:dist": "tsup",
-		"test": "vitest run"
+		"test": "vitest run --root ../.. packages/core/src/__tests__"
 	},
-	"peerDependencies": {
-		"kuery": ">=2.0.0"
-	},
-	"peerDependenciesMeta": {
-		"kuery": {
-			"optional": false
-		}
-	},
-	"devDependencies": {
-		"kuery": "^2.0.0"
+	"dependencies": {
+		"kuery": "^2.1.0"
 	},
 	"publishConfig": {
 		"access": "public"

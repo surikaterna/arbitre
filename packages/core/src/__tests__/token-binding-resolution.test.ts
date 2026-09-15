@@ -43,7 +43,7 @@ describe("Token Binding Resolution (BETA-2d)", () => {
 		expect(session.getPath("result.val")).toBe(42);
 	});
 
-	it("expression with two bindings: $subtract computes difference", () => {
+	it("expression with two bindings: strict $subtract computes difference", () => {
 		const rule: ProductionRule = {
 			name: "compute-diff",
 			when: {},

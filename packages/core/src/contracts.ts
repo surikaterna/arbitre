@@ -2,6 +2,8 @@ import type { DotPaths, ExprNode, PathValue, TypedQuery } from "kuery";
 import type { CustomAccumulateFunction } from "./accumulate-functions.js";
 import type { AccumulateConfig } from "./accumulate-node.js";
 import type { ArbiterClock } from "./clock.js";
+import type { ArbitreExpressionConfig, CompiledArbitreValue, RuleDependencies } from "./expression-types.js";
+import type { CanonicalArbitreExpression } from "./expression-types.js";
 import type { Fact } from "./fact-memory.js";
 import type { CompiledPattern, FactPattern } from "./fact-pattern.js";
 import type { SessionHooks } from "./hooks.js";
@@ -36,11 +38,53 @@ export interface ThenOperatorRegistry {
 /** A single pipeline stage — one $-prefixed operator key. */
 export type ThenStage<TState = Record<string, unknown>> = Readonly<Record<string, unknown>> & {
 	/** Type-safe $set: paths are constrained to DotPaths<TState>. */
-	readonly $set?: { readonly [P in DotPaths<TState>]?: PathValue<TState, P> };
+	readonly $set?: { readonly [P in DotPaths<TState>]?: ThenValue<PathValue<TState, P>> };
 };
 
 /** Expression or literal value — validated at compile time, not type level. */
-export type ThenValue = unknown;
+export type ThenValue<T = unknown> =
+	| T
+	| string
+	| Readonly<Record<string, unknown>>
+	| CanonicalArbitreExpression
+	| SwitchExpression
+	| RelativeTimeExpression
+	| AfterExpression
+	| BeforeExpression
+	| ElapsedExpression
+	| WithinExpression;
+
+export interface SwitchBranch {
+	readonly case: ThenValue;
+	readonly then: ThenValue;
+}
+
+export interface SwitchExpression {
+	readonly $switch: {
+		readonly branches: readonly SwitchBranch[];
+		readonly default?: ThenValue | undefined;
+	};
+}
+
+export interface RelativeTimeExpression {
+	readonly $rtime: string;
+}
+
+export interface AfterExpression {
+	readonly $after: ThenValue | readonly [ThenValue];
+}
+
+export interface BeforeExpression {
+	readonly $before: ThenValue | readonly [ThenValue];
+}
+
+export interface ElapsedExpression {
+	readonly $elapsed: readonly [ThenValue, ThenValue];
+}
+
+export interface WithinExpression {
+	readonly $within: readonly [ThenValue, ThenValue];
+}
 
 // ---------------------------------------------------------------------------
 // ProductionRule (ADR §2.1)
@@ -64,12 +108,6 @@ export interface ProductionRule<TState = Record<string, unknown>> {
 // ---------------------------------------------------------------------------
 // Session configuration (ADR §3)
 // ---------------------------------------------------------------------------
-
-export type OperatorFunction = (args: readonly unknown[], scope: Readonly<Record<string, unknown>>) => unknown;
-
-export interface OperatorRegistryConfig {
-	readonly custom?: Readonly<Record<string, OperatorFunction>> | undefined;
-}
 
 export interface SessionLimits {
 	readonly maxCycles?: number | undefined;
@@ -99,7 +137,7 @@ export interface TmsConfig {
 export interface SessionConfig<TState = Record<string, unknown>> {
 	readonly rules?: readonly ProductionRule<TState>[] | undefined;
 	readonly initialState?: Readonly<Record<string, unknown>> | undefined;
-	readonly operators?: OperatorRegistryConfig | undefined;
+	readonly expressions?: ArbitreExpressionConfig | undefined;
 	readonly limits?: SessionLimits | undefined;
 	readonly tms?: TmsConfig | undefined;
 	readonly errorHandling?: "strict" | "lenient" | undefined;
@@ -211,9 +249,10 @@ export interface CompiledRule {
 	readonly patterns?: readonly CompiledPattern[] | undefined;
 	readonly accumulates?: readonly AccumulateConfig[] | undefined;
 	readonly source: ProductionRule<unknown>;
+	readonly dependencies: RuleDependencies;
 }
 
 export interface CompiledStage {
 	readonly operator: string;
-	readonly entries: ReadonlyMap<string, unknown>;
+	readonly entries: ReadonlyMap<string, unknown | CompiledArbitreValue>;
 }

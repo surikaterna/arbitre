@@ -18,7 +18,8 @@ export function validatePath(path: string): void {
 		throw new ArbiterError(ArbiterErrorCode.INVALID_PATH, "Path must be a non-empty string");
 	}
 	try {
-		validateAndSplitPath(path);
+		const segments = validateAndSplitPath(path);
+		if ((segments as readonly string[]).some((segment) => segment.length === 0)) throw new TypeError();
 	} catch {
 		throw new ArbiterError(ArbiterErrorCode.PROTOTYPE_POLLUTION, `Path "${path}" contains dangerous segment`);
 	}
@@ -42,16 +43,4 @@ export function matchWildcardPath(pattern: string, concrete: string): boolean {
 	if (patternSegments.length !== concreteSegments.length) return false;
 
 	return patternSegments.every((seg, i) => seg === "*" || seg === concreteSegments[i]);
-}
-
-/**
- * Returns true if value is an object with at least one `$`-prefixed key,
- * indicating it's an expression rather than a literal.
- */
-export function isExpression(value: unknown): boolean {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) {
-		return false;
-	}
-	const keys = Object.keys(value as Record<string, unknown>);
-	return keys.length > 0 && keys.some((k) => k.startsWith("$"));
 }
