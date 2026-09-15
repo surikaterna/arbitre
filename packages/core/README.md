@@ -77,7 +77,7 @@ session.assertFact("order", { customerId: "c1", total: 2500 });
 session.fire();
 ```
 
-### Temporal Operators
+### Clock-based rules
 
 ```typescript
 import { createSession, createVirtualClock } from "@arbitre/core";
@@ -87,8 +87,8 @@ const session = createSession({
   clock,
   rules: [
     {
-      name: "idle-timeout",
-      when: { $since: [{ $path: "user.lastActive" }, 30000] },
+      name: "deadline",
+      when: { "$meta.$now": { $gt: 30000 } },
       then: [{ $set: { "user.status": "idle" } }],
     },
   ],
@@ -238,7 +238,11 @@ const rule = {
   when: { enabled: true },
   then: [{ $set: {
     total: { $sum: ["$price", "$tax"] },
-    decision: { $cond: ["$approved", "yes", "no"] },
+    decision: { $switch: { branches: [
+      { case: "$approved", then: "yes" }
+    ], default: "no" } },
+	deadline: { $rtime: "+1d" },
+	isRecent: { $within: ["$createdAt", 30000] },
     data: literal({ $sum: [1, 2] }),
     canonical: expression({ kind: "op", op: "add", args: [
       { kind: "literal", value: 1 }, { kind: "literal", value: 2 }
@@ -249,7 +253,7 @@ const rule = {
 
 Each RHS entry resolves against live state immediately before its write. Declared token bindings take precedence over root paths. Use `session.introspect.getRuleDependencies(name)` to inspect condition reads, RHS reads, action writes, and token-binding reads; only condition reads schedule rules. `actionWrites` contains statically known built-in paths. Rules containing a custom stage also expose `actionWritesUnknown: true`, without treating custom entry keys as writes; runtime state changes remain exact.
 
-Strict shorthand includes arithmetic (`$sum`, `$multiply`, `$subtract`, `$divide`), `$min`/`$max`/`$avg`, rounding, string-only `$concat`, comparisons, boolean logic, membership, `$exists`, `$ifNull`, and lazy `$cond`. Variadic `$sum`/`$multiply` lower to standard `add`/`mul`. `$foo.bar` selects a declared `foo` binding, registered `$foo` namespace, or root path in that order; `$$foo.bar` forces a declared namespace. Dot characters delimit safe segments and are not literal key characters. `$switch`, conversions, and legacy temporal RHS callbacks are deterministic migration errors. See [ADR 0001](./docs/adr/0001-kuery-expression-runtime.md) for the complete migration table and temporary Kuery release blocker.
+Strict shorthand includes arithmetic (`$sum`, `$multiply`, `$subtract`, `$divide`), `$min`/`$max`/`$avg`, rounding, string-only `$concat`, comparisons, boolean logic, membership, `$exists`, `$ifNull`, lazy `$cond`, `$switch`, `$rtime`, `$after`, `$before`, `$elapsed`, and `$within`. `$switch` evaluates strict-boolean cases in order and only evaluates its selected result. `$rtime` accepts signed fixed-unit durations (`ms`, `s`, `m`, `h`, or a fixed 86,400,000 ms `d`) and produces epoch milliseconds from an explicitly configured clock. There is no `$since` alias. Variadic `$sum`/`$multiply` lower to standard `add`/`mul`. `$foo.bar` selects a declared `foo` binding, registered `$foo` namespace, or root path in that order; `$$foo.bar` forces a declared namespace. Dot characters delimit safe segments and are not literal key characters. Extensions are canonical-only and must be invoked through `expression(...)`; an extension name does not create shorthand. See [ADR 0001](./docs/adr/0001-kuery-expression-runtime.md) for the complete migration table and temporary Kuery release blocker.
 
 `$inc` uses zero only for an absent terminal own property and otherwise requires an inspectable finite existing number, finite amount, and finite result. `$merge` shallow-copies exact plain data objects only: `Object.prototype` and null prototypes are accepted, while exotic prototypes, accessors, symbols, non-enumerables, and unsafe keys are rejected before copying. Missing merges preserve the RHS prototype; existing merges preserve the target prototype, and all materialized properties remain writable for later stages. Commit-path failures are reported with only the operator, rule, path, and a stable reason.
 
@@ -270,7 +274,7 @@ The supported state boundary is trusted plain-data graphs, such as decoded JSON,
 
 ### Temporal behavior
 
-Clock injection (`$meta.$now`), `tick`, schedules, rule expiry, and windowed accumulation are unchanged. Scope-aware temporal RHS callbacks were part of the removed custom expression contract; use strict comparisons against `$$meta.$now` or precompute a value before assertion.
+Clock expression sugar is available only when `clock` is explicitly configured; Arbitre never supplies an implicit wall clock. `$after(t)` means `now > t`, `$before(t)` means `now < t`, `$elapsed([t, d])` means `now - t > d`, and `$within([t, d])` means `now - t < d`; equality is false and negative values use the same direct arithmetic. A missing clock or operand returns `false`, a denied reference remains an error, and a present wrong type is a Kuery type mismatch. Guarded present operands can resolve twice against state that is stable during one expression evaluation. Temporal RHS reads are static dependency metadata and do not independently schedule/refire a rule; use `tick` with a time condition when reactivity is required. Schedules, rule expiry, and windowed accumulation remain separate orchestration features.
 
 ### Error Codes
 
