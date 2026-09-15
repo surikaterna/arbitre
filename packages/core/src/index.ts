@@ -20,6 +20,9 @@ export type { ArbiterClock, VirtualClock } from "./clock.js";
 export { createRealClock, createVirtualClock } from "./clock.js";
 export type {
 	ArbiterWarning,
+	AfterExpression,
+	BeforeExpression,
+	ElapsedExpression,
 	FiringResult,
 	NamespaceConfig,
 	ProductionRule,
@@ -27,14 +30,18 @@ export type {
 	SessionConfig,
 	SessionLimits,
 	StateChange,
+	SwitchBranch,
+	SwitchExpression,
 	SubscriptionCallback,
 	ThenOperatorHandler,
 	ThenOperatorRegistry,
 	ThenStage,
 	ThenValue,
+	RelativeTimeExpression,
 	TmsConfig,
 	Unsubscribe,
 	WriteRecord,
+	WithinExpression,
 } from "./contracts.js";
 export type {
 	ArbitreExpressionConfig,

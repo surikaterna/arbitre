@@ -16,9 +16,9 @@ export function createSessionFire<TState>(
 		if (kernel.flags.firing) reentrant();
 		kernel.flags.firing = true;
 		try {
-			injectClock(kernel);
+			const now = injectClock(kernel);
 			const result = runCycle(kernel);
-			updateExpiry(kernel, result);
+			updateExpiry(kernel, result, now);
 			trackPatternRuleProvenance(result, kernel.compiledRules, kernel.betaEvaluator, kernel.tms);
 			subscriptions.notify(result.changes);
 			kernel.metrics.totalRulesFired += result.rulesFired;
@@ -57,19 +57,31 @@ function fireContext<TState>(kernel: SessionKernel<TState>): FireContext {
 	return kernel.config.thenOperators ? { ...context, thenOperators: kernel.config.thenOperators } : context;
 }
 
-function updateExpiry<TState>(kernel: SessionKernel<TState>, result: FiringResult): void {
-	if (!kernel.expiryTracker || !kernel.clock) return;
+function updateExpiry<TState>(kernel: SessionKernel<TState>, result: FiringResult, now: number | undefined): void {
+	if (!kernel.expiryTracker || now === undefined) return;
 	for (const ruleName of kernel.expiryMap.keys()) {
 		if (!(kernel.ruleConditionState.get(ruleName) ?? false)) kernel.expiryTracker.reset(ruleName);
 	}
 	for (const change of result.changes) {
-		if (kernel.expiryMap.has(change.ruleName))
-			kernel.expiryTracker.onRuleActivated(change.ruleName, kernel.clock.now());
+		if (kernel.expiryMap.has(change.ruleName)) kernel.expiryTracker.onRuleActivated(change.ruleName, now);
 	}
 }
 
-function injectClock<TState>(kernel: SessionKernel<TState>): void {
-	if (kernel.clock) kernel.scope.set("$meta.$now", kernel.clock.now(), "__clock__");
+function injectClock<TState>(kernel: SessionKernel<TState>): number | undefined {
+	if (!kernel.clock) return undefined;
+	let now: unknown;
+	try {
+		now = kernel.clock.now();
+	} catch {
+		invalidClock();
+	}
+	if (typeof now !== "number" || !Number.isFinite(now)) invalidClock();
+	kernel.scope.set("$meta.$now", now, "__clock__");
+	return now;
+}
+
+function invalidClock(): never {
+	throw new ArbiterError(ArbiterErrorCode.INVALID_CLOCK_OPERATION, "Configured clock returned an invalid time");
 }
 
 function isLimitError(error: unknown): boolean {

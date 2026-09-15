@@ -24,6 +24,12 @@ export interface ArbitreExpressionConfig {
 
 export interface CompiledArbitreValue {
 	readonly expression: CompiledExpression<ArbitreReference>;
+	readonly diagnosticPaths: readonly DiagnosticPathMapping[];
+}
+
+export interface DiagnosticPathMapping {
+	readonly canonical: readonly (string | number)[];
+	readonly authored: readonly (string | number)[];
 }
 
 export interface RuleDependencies {

@@ -1,6 +1,7 @@
 import type { JsonValue, ReferenceResolution } from "kuery/expression";
 import type { Token } from "./beta-node.js";
 import { ArbiterError, ArbiterErrorCode } from "./errors.js";
+import { authoredPath } from "./expression-lower.js";
 import type { ArbitreReference, CompiledArbitreValue } from "./expression-types.js";
 import type { ScopeManager } from "./scope.js";
 import { isRecord } from "./type-guards.js";
@@ -13,10 +14,11 @@ export function evaluateArbitreValue(
 ): JsonValue {
 	const result = value.expression.evaluate((reference: ArbitreReference) => resolveReference(reference, scope, token));
 	if (result.ok) return result.value;
+	const path = authoredPath(result.diagnostic.path, value.diagnosticPaths);
 	throw new ArbiterError(
 		ArbiterErrorCode.EXPRESSION_EVALUATION_FAILED,
-		`Rule "${ruleName}" RHS expression failed (${result.diagnostic.code}) at ${result.diagnostic.path.join(".") || "root"}`,
-		{ ruleName, details: { diagnosticCode: result.diagnostic.code, path: result.diagnostic.path } },
+		`Rule "${ruleName}" RHS expression failed (${result.diagnostic.code}) at ${path.join(".") || "root"}`,
+		{ ruleName, details: { diagnosticCode: result.diagnostic.code, path } },
 	);
 }
 

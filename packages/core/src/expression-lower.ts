@@ -2,6 +2,7 @@ import { compileExpression } from "kuery/expression";
 import type { ExpressionLimits, ExpressionProfile, JsonValue, ReferenceCodec, ValueExpression } from "kuery/expression";
 import type { Result } from "kuery/expression";
 import { ArbiterError, ArbiterErrorCode } from "./errors.js";
+import { lowerExpressionSugar } from "./expression-sugar.js";
 import type { ArbitreReference, CanonicalArbitreExpression, CompiledArbitreValue } from "./expression-types.js";
 import { splitPath, validatePath } from "./path-utils.js";
 
@@ -42,8 +43,11 @@ export interface LowerOptions {
 
 export function compileArbitreValue(input: unknown, options: LowerOptions): CompiledArbitreValue {
 	let result: Result<import("kuery/expression").CompiledExpression<ArbitreReference>>;
+	const annotations = new WeakMap<object, readonly (string | number)[]>();
+	let mappings: readonly import("./expression-types.js").DiagnosticPathMapping[] = [];
 	try {
-		const ast = lower(input, options, []);
+		const ast = lower(input, options, [], annotations);
+		mappings = collectDiagnosticPaths(ast, annotations);
 		result = compileExpression<ArbitreReference>(ast, {
 			profile: options.profile,
 			reference: createReferenceCodec(options),
@@ -53,20 +57,24 @@ export function compileArbitreValue(input: unknown, options: LowerOptions): Comp
 		if (error instanceof ArbiterError) throw error;
 		fail("EXPRESSION_INVALID_INPUT", [], options.ruleName);
 	}
-	if (!result.ok) fail(result.diagnostic.code, result.diagnostic.path, options.ruleName);
-	return { expression: result.value };
+	if (!result.ok) fail(result.diagnostic.code, authoredPath(result.diagnostic.path, mappings), options.ruleName);
+	return Object.freeze({ expression: result.value, diagnosticPaths: mappings });
 }
 
 function lower(
 	input: unknown,
 	options: LowerOptions,
 	path: readonly (string | number)[],
+	annotations: WeakMap<object, readonly (string | number)[]>,
 ): ValueExpression<ArbitreReference> {
-	if (isCanonicalWrapper(input))
-		return dataValue(input, "$expression", path, options.ruleName) as ValueExpression<ArbitreReference>;
-	if (typeof input === "string" && input.startsWith("$")) return lowerReference(input, options);
-	if (operatorCandidate(input)) return lowerOperator(input, options, path);
-	return { kind: "literal", value: input as JsonValue };
+	if (isCanonicalWrapper(input)) {
+		const node = dataValue(input, "$expression", path, options.ruleName) as ValueExpression<ArbitreReference>;
+		return path.length === 0 ? node : annotate(node, path, annotations);
+	}
+	if (typeof input === "string" && input.startsWith("$"))
+		return annotate(lowerReference(input, options), path, annotations);
+	if (operatorCandidate(input)) return lowerOperator(input, options, path, annotations);
+	return annotate({ kind: "literal", value: input as JsonValue }, path, annotations);
 }
 
 function operatorCandidate(input: unknown): input is Record<string, unknown> {
@@ -78,46 +86,57 @@ function lowerOperator(
 	input: Record<string, unknown>,
 	options: LowerOptions,
 	path: readonly (string | number)[],
+	annotations: WeakMap<object, readonly (string | number)[]>,
 ): ValueExpression<ArbitreReference> {
 	const keys = safeKeys(input);
 	if (keys.length !== 1 || !keys[0]?.startsWith("$")) fail("ambiguous shorthand", path, options.ruleName);
 	const key = keys[0]!;
 	const raw = dataValue(input, key, path, options.ruleName);
-	if (key === "$literal") return { kind: "literal", value: raw as JsonValue };
+	if (key === "$literal") return annotate({ kind: "literal", value: raw as JsonValue }, [...path, key], annotations);
 	if (REMOVED_OPERATORS.has(key)) fail(`removed operator ${key}`, path, options.ruleName);
-	if (key === "$sum" || key === "$multiply") return lowerArithmetic(key, raw, options, path);
+	const sugar = lowerExpressionSugar(key, raw, path, {
+		lower: (value, authored) => lower(value, options, authored, annotations),
+		annotate: (node, authored) => annotate(node, authored, annotations),
+		fail: (reason, authored) => fail(reason, authored, options.ruleName),
+	});
+	if (sugar) return sugar;
+	if (key === "$sum" || key === "$multiply") return lowerArithmetic(key, raw, options, path, annotations);
 	const operator = OPERATORS[key];
 	if (!operator) fail(`unknown operator ${key}`, path, options.ruleName);
 	let args: readonly unknown[] = Array.isArray(raw) ? arrayValues(raw, [...path, key], options.ruleName) : [raw];
 	if (key === "$round" && args.length === 1) args = [args[0], 0];
-	return { kind: "op", op: operator, args: args.map((arg, index) => lower(arg, options, [...path, key, index])) };
+	return annotate(
+		{
+			kind: "op",
+			op: operator,
+			args: args.map((arg, index) => lower(arg, options, [...path, key, index], annotations)),
+		},
+		[...path, key],
+		annotations,
+	);
 }
 
-const REMOVED_OPERATORS = new Set([
-	"$switch",
-	"$toNumber",
-	"$toString",
-	"$toBool",
-	"$elapsed",
-	"$within",
-	"$after",
-	"$before",
-]);
+const REMOVED_OPERATORS = new Set(["$toNumber", "$toString", "$toBool"]);
 
 function lowerArithmetic(
 	key: "$sum" | "$multiply",
 	raw: unknown,
 	options: LowerOptions,
 	path: readonly (string | number)[],
+	annotations: WeakMap<object, readonly (string | number)[]>,
 ): ValueExpression<ArbitreReference> {
 	const values = Array.isArray(raw) ? arrayValues(raw, [...path, key], options.ruleName) : [raw];
 	if (values.length === 0 || values.length > 32) fail(`${key} requires 1 to 32 arguments`, path, options.ruleName);
-	const nodes = values.map((value, index) => lower(value, options, [...path, key, index]));
+	const nodes = values.map((value, index) => lower(value, options, [...path, key, index], annotations));
 	const operator = key === "$sum" ? "add" : "mul";
 	if (nodes.length === 1) {
-		return { kind: "op", op: operator, args: [nodes[0]!, { kind: "literal", value: operator === "add" ? 0 : 1 }] };
+		return annotate(
+			{ kind: "op", op: operator, args: [nodes[0]!, { kind: "literal", value: operator === "add" ? 0 : 1 }] },
+			[...path, key],
+			annotations,
+		);
 	}
-	return binaryTree(operator, nodes);
+	return annotate(binaryTree(operator, nodes), [...path, key], annotations);
 }
 
 function binaryTree(
@@ -264,4 +283,46 @@ function safePath(value: unknown): value is string {
 
 function validateReferencePath(path: string, ruleName: string): void {
 	if (!safePath(path)) fail("invalid reference path", [], ruleName);
+}
+
+function annotate<T extends ValueExpression<ArbitreReference>>(
+	node: T,
+	path: readonly (string | number)[],
+	annotations: WeakMap<object, readonly (string | number)[]>,
+): T {
+	annotations.set(node, Object.freeze([...path]));
+	return node;
+}
+
+function collectDiagnosticPaths(
+	root: ValueExpression<ArbitreReference>,
+	annotations: WeakMap<object, readonly (string | number)[]>,
+): readonly import("./expression-types.js").DiagnosticPathMapping[] {
+	const output: import("./expression-types.js").DiagnosticPathMapping[] = [];
+	const visit = (node: ValueExpression<ArbitreReference>, canonical: readonly (string | number)[]): void => {
+		const authored = annotations.get(node);
+		if (authored) output.push(Object.freeze({ canonical: Object.freeze([...canonical]), authored }));
+		if (node.kind !== "op") return;
+		const args: readonly ValueExpression<ArbitreReference>[] = node.args;
+		args.forEach((argument, index) => visit(argument, [...canonical, "args", index]));
+	};
+	visit(root, []);
+	return Object.freeze(output);
+}
+
+export function authoredPath(
+	canonical: readonly (string | number)[],
+	mappings: readonly import("./expression-types.js").DiagnosticPathMapping[],
+): readonly (string | number)[] {
+	let nearest: import("./expression-types.js").DiagnosticPathMapping | undefined;
+	for (const mapping of mappings) {
+		if (isPrefix(mapping.canonical, canonical) && (!nearest || mapping.canonical.length > nearest.canonical.length)) {
+			nearest = mapping;
+		}
+	}
+	return nearest ? [...nearest.authored, ...canonical.slice(nearest.canonical.length)] : canonical;
+}
+
+function isPrefix(prefix: readonly (string | number)[], path: readonly (string | number)[]): boolean {
+	return prefix.length <= path.length && prefix.every((part, index) => part === path[index]);
 }

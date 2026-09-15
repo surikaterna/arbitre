@@ -125,19 +125,11 @@ describe("arbitre-v1 RHS shorthand", () => {
 });
 
 describe("registration and evaluation diagnostics", () => {
-	it.each(["$switch", "$toNumber", "$toString", "$toBool", "$elapsed", "$within", "$after", "$before"])(
-		"rejects removed %s",
-		(operator) => {
-			expectErrorCode(
-				() => createSession({ rules: [rule({ [operator]: [1] })] }),
-				"ARBITER_EXPRESSION_COMPILATION_FAILED",
-			);
-		},
-	);
-
-	it.each(["$elapsed", "$within", "$after", "$before"])("reports temporal migration for %s", (operator) => {
-		const error = captureError(() => createSession({ rules: [rule({ [operator]: [1, 2] })] }));
-		expect(error.details).toMatchObject({ diagnosticCode: `removed operator ${operator}`, path: [] });
+	it.each(["$toNumber", "$toString", "$toBool"])("rejects removed %s", (operator) => {
+		expectErrorCode(
+			() => createSession({ rules: [rule({ [operator]: [1] })] }),
+			"ARBITER_EXPRESSION_COMPILATION_FAILED",
+		);
 	});
 
 	it("rejects unknown and ambiguous shorthand at registration", () => {
@@ -236,7 +228,7 @@ describe("registration and evaluation diagnostics", () => {
 	it("maps strict arithmetic and missing failures without leaking values", () => {
 		const error = captureError(() => run({ $divide: [1, 0] }));
 		expect(error.code).toBe("ARBITER_EXPRESSION_EVALUATION_FAILED");
-		expect(error.details).toEqual({ diagnosticCode: "EXPRESSION_DIVISION_BY_ZERO", path: [] });
+		expect(error.details).toEqual({ diagnosticCode: "EXPRESSION_DIVISION_BY_ZERO", path: ["$divide"] });
 		expect(() => run("$missing")).toThrow("EXPRESSION_REFERENCE_MISSING");
 	});
 

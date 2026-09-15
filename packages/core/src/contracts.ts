@@ -42,7 +42,49 @@ export type ThenStage<TState = Record<string, unknown>> = Readonly<Record<string
 };
 
 /** Expression or literal value — validated at compile time, not type level. */
-export type ThenValue<T = unknown> = T | string | Readonly<Record<string, unknown>> | CanonicalArbitreExpression;
+export type ThenValue<T = unknown> =
+	| T
+	| string
+	| Readonly<Record<string, unknown>>
+	| CanonicalArbitreExpression
+	| SwitchExpression
+	| RelativeTimeExpression
+	| AfterExpression
+	| BeforeExpression
+	| ElapsedExpression
+	| WithinExpression;
+
+export interface SwitchBranch {
+	readonly case: ThenValue;
+	readonly then: ThenValue;
+}
+
+export interface SwitchExpression {
+	readonly $switch: {
+		readonly branches: readonly SwitchBranch[];
+		readonly default?: ThenValue | undefined;
+	};
+}
+
+export interface RelativeTimeExpression {
+	readonly $rtime: string;
+}
+
+export interface AfterExpression {
+	readonly $after: ThenValue | readonly [ThenValue];
+}
+
+export interface BeforeExpression {
+	readonly $before: ThenValue | readonly [ThenValue];
+}
+
+export interface ElapsedExpression {
+	readonly $elapsed: readonly [ThenValue, ThenValue];
+}
+
+export interface WithinExpression {
+	readonly $within: readonly [ThenValue, ThenValue];
+}
 
 // ---------------------------------------------------------------------------
 // ProductionRule (ADR §2.1)

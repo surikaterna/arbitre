@@ -1,8 +1,14 @@
 import {
+	type AfterExpression,
 	type ArbitreReference,
 	type ArbitreValueExpression,
+	type BeforeExpression,
+	type ElapsedExpression,
 	type ProductionRule,
+	type RelativeTimeExpression,
 	type RuleDependencies,
+	type SwitchExpression,
+	type WithinExpression,
 	arbitreV1,
 	createSession,
 	expression,
@@ -34,6 +40,22 @@ const dependencies: RuleDependencies = {
 	bindingReads: [],
 };
 void dependencies;
+
+const switchValue: SwitchExpression = { $switch: { branches: [{ case: "$ready", then: 1 }], default: null } };
+const relativeTime: RelativeTimeExpression = { $rtime: "+1d" };
+const after: AfterExpression = { $after: ["$createdAt"] };
+const before: BeforeExpression = { $before: "$deadline" };
+const elapsed: ElapsedExpression = { $elapsed: ["$createdAt", 1_000] };
+const within: WithinExpression = { $within: ["$createdAt", 1_000] };
+void [switchValue, relativeTime, after, before, elapsed, within];
+
+// @ts-expect-error Switch branches require both case and then.
+const invalidSwitch: SwitchExpression = { $switch: { branches: [{ case: true }] } };
+// @ts-expect-error Elapsed requires an exact two-item tuple.
+const invalidElapsed: ElapsedExpression = { $elapsed: [1] };
+// @ts-expect-error Relative time is authored as a primitive string.
+const invalidRelativeTime: RelativeTimeExpression = { $rtime: 1 };
+void [invalidSwitch, invalidElapsed, invalidRelativeTime];
 
 // @ts-expect-error Structured references require a supported source.
 const invalid: ArbitreReference = { source: "global", path: "secret" };
