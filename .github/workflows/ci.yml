@@ -36,3 +36,6 @@ jobs:
 
       - name: Build
         run: bun run build
+
+      - name: Native pack consumer regression
+        run: bun run test:pack-consumer

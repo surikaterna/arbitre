@@ -10,7 +10,8 @@
 		"test:performance": "vitest run --config vitest.performance.config.ts",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
-		"test:public-types": "tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext test/expression-public-types.mts"
+		"test:public-types": "tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext test/expression-public-types.mts",
+		"test:pack-consumer": "node test/pack-consumer.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",
