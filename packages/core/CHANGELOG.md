@@ -1,5 +1,11 @@
 # @arbitre/core
 
+## 0.3.1
+
+### Patch Changes
+
+- 41943d5: Select CJS declarations for NodeNext require consumers and correct the testing/debug subpath targets in the packed exports.
+
 ## 0.3.0
 
 ### Minor Changes
