@@ -1,6 +1,6 @@
 {
 	"name": "@arbitre/core",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"type": "module",
 	"description": "Rete-inspired production rule engine for declarative state governance",
 	"license": "MIT",
@@ -26,16 +26,34 @@
 	"types": "./dist/index.d.ts",
 	"exports": {
 		".": {
-			"import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-			"require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
 		},
 		"./testing": {
-			"import": { "types": "./dist/testing/index.d.ts", "default": "./dist/testing/index.js" },
-			"require": { "types": "./dist/testing/index.d.cts", "default": "./dist/testing/index.cjs" }
+			"import": {
+				"types": "./dist/testing/index.d.ts",
+				"default": "./dist/testing/index.js"
+			},
+			"require": {
+				"types": "./dist/testing/index.d.cts",
+				"default": "./dist/testing/index.cjs"
+			}
 		},
 		"./debug": {
-			"import": { "types": "./dist/debug/index.d.ts", "default": "./dist/debug/index.js" },
-			"require": { "types": "./dist/debug/index.d.cts", "default": "./dist/debug/index.cjs" }
+			"import": {
+				"types": "./dist/debug/index.d.ts",
+				"default": "./dist/debug/index.js"
+			},
+			"require": {
+				"types": "./dist/debug/index.d.cts",
+				"default": "./dist/debug/index.cjs"
+			}
 		}
 	},
 	"files": ["dist", "src", "docs"],
